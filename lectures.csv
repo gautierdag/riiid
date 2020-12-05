@@ -1,0 +1,419 @@
+lecture_id,tag,part,type_of
+89,159,5,concept
+100,70,1,concept
+185,45,6,concept
+192,79,5,solving question
+317,156,5,solving question
+335,114,2,concept
+484,179,5,concept
+641,134,6,solving question
+761,93,1,concept
+814,80,5,solving question
+1003,98,7,concept
+1077,101,1,solving question
+1105,134,5,concept
+1144,33,5,concept
+1253,74,3,solving question
+1308,60,6,concept
+1450,101,1,solving question
+1501,181,5,concept
+1604,43,5,solving question
+1731,4,5,concept
+1887,109,5,solving question
+1907,89,6,concept
+1967,142,2,solving question
+2033,140,2,solving question
+2049,104,1,concept
+2084,1,6,solving question
+2278,65,5,concept
+2282,155,2,concept
+2299,26,5,solving question
+2327,178,1,concept
+2476,173,5,solving question
+2771,7,5,solving question
+2857,147,6,concept
+2904,171,4,concept
+2918,78,5,concept
+3078,74,3,concept
+3113,173,5,concept
+3123,89,5,concept
+3153,62,2,intention
+3255,60,5,concept
+3625,26,6,concept
+3668,64,5,solving question
+3697,141,2,solving question
+3780,74,4,solving question
+3803,124,5,solving question
+3852,161,4,solving question
+3879,24,5,concept
+3937,23,6,concept
+4057,152,5,concept
+4072,4,6,solving question
+4100,101,1,solving question
+4118,8,6,concept
+4173,94,1,solving question
+4187,70,1,solving question
+4385,181,5,starter
+4425,1,6,concept
+4441,119,2,solving question
+4652,37,7,concept
+4705,43,6,concept
+4883,173,5,solving question
+5120,177,5,solving question
+5240,54,5,solving question
+5266,157,3,concept
+5588,132,6,concept
+5694,140,2,concept
+5752,6,2,intention
+5990,67,4,concept
+6081,123,6,concept
+6101,50,7,solving question
+6137,25,5,concept
+6220,175,6,concept
+6316,116,5,solving question
+6481,123,5,concept
+6619,93,1,solving question
+6761,136,4,solving question
+6797,20,2,concept
+6808,129,2,intention
+6948,127,5,solving question
+7008,53,6,solving question
+7010,130,1,solving question
+7097,13,1,solving question
+7385,42,7,concept
+7477,72,5,concept
+7704,116,5,solving question
+7785,36,1,solving question
+7877,141,2,solving question
+7920,172,6,concept
+7926,57,5,concept
+7949,80,5,concept
+8138,151,6,concept
+8207,9,1,concept
+8233,187,1,concept
+8240,58,6,concept
+8288,62,2,solving question
+8317,94,1,concept
+8320,166,6,concept
+8330,49,5,concept
+8411,181,5,solving question
+8461,173,6,concept
+8513,164,1,solving question
+8693,163,2,solving question
+8708,47,5,concept
+8821,139,7,concept
+8976,62,2,intention
+8977,85,5,solving question
+9174,91,5,solving question
+9212,158,4,concept
+9245,48,6,concept
+9477,9,1,solving question
+9554,69,2,intention
+9758,136,3,concept
+9831,76,7,concept
+9835,28,5,solving question
+9856,98,7,solving question
+9896,167,5,concept
+10010,159,6,solving question
+10032,18,7,concept
+10040,62,2,solving question
+10052,0,7,concept
+10075,27,6,solving question
+10180,33,6,concept
+10217,19,7,concept
+10354,80,6,concept
+10382,149,1,solving question
+10383,156,5,concept
+10540,99,1,concept
+10688,39,7,concept
+10742,76,7,concept
+10852,34,5,concept
+10928,136,3,solving question
+11151,119,2,solving question
+11230,70,1,solving question
+11236,61,1,solving question
+11485,166,5,solving question
+11559,14,5,solving question
+11772,113,4,solving question
+11873,152,6,concept
+11877,182,5,solving question
+12007,177,5,concept
+12187,70,1,solving question
+12294,55,5,solving question
+12354,49,6,concept
+12469,94,1,solving question
+12472,151,5,concept
+12509,145,7,concept
+12638,96,5,concept
+12655,49,5,solving question
+12811,133,5,concept
+12831,12,4,concept
+12846,106,3,solving question
+12942,126,4,concept
+13138,4,5,solving question
+13256,136,4,solving question
+13336,113,4,concept
+13379,124,5,concept
+13384,61,1,solving question
+13471,47,5,solving question
+13487,98,7,solving question
+13550,47,6,concept
+13600,60,5,solving question
+13605,91,5,concept
+13639,105,2,concept
+13660,125,5,concept
+13704,36,1,solving question
+13706,168,6,concept
+13909,5,1,concept
+13942,119,2,solving question
+14015,27,6,solving question
+14019,179,6,solving question
+14021,71,2,solving question
+14059,82,3,solving question
+14174,134,5,solving question
+14287,44,5,solving question
+14323,14,5,concept
+14325,69,2,intention
+14429,25,6,solving question
+14443,28,5,concept
+14529,101,1,concept
+14654,62,2,solving question
+14811,108,5,solving question
+14931,27,6,solving question
+14942,48,5,concept
+15062,96,5,solving question
+15256,72,6,concept
+15298,143,2,concept
+15359,109,6,concept
+15388,5,1,solving question
+15430,71,2,concept
+15722,149,1,solving question
+15858,147,5,concept
+15888,26,5,concept
+16013,74,4,concept
+16034,55,5,concept
+16136,90,2,concept
+16192,179,6,concept
+16218,152,5,solving question
+16329,16,7,solving question
+16363,64,6,concept
+16444,112,5,concept
+16551,73,5,solving question
+16588,16,7,concept
+16629,178,1,solving question
+16736,40,1,concept
+16773,62,2,solving question
+16863,74,4,solving question
+16874,53,6,concept
+16992,149,1,solving question
+17048,111,1,concept
+17124,166,5,concept
+17199,54,5,concept
+17243,71,2,solving question
+17326,73,6,concept
+17329,51,1,concept
+17519,97,7,concept
+17614,42,7,solving question
+17649,40,1,solving question
+17807,7,6,concept
+17914,182,5,concept
+18091,26,5,solving question
+18101,6,2,solving question
+18186,161,4,concept
+18239,31,5,concept
+18307,71,2,solving question
+18346,157,3,solving question
+18397,14,6,solving question
+18412,33,5,solving question
+18467,94,1,solving question
+18545,58,5,concept
+18668,116,6,concept
+18704,52,6,concept
+18862,180,5,concept
+18903,28,6,concept
+18916,138,2,concept
+19093,150,4,concept
+19147,51,1,solving question
+19178,133,5,solving question
+19184,157,4,concept
+19223,120,4,concept
+19224,128,6,concept
+19411,36,1,concept
+19567,125,6,concept
+19744,141,2,concept
+19807,48,5,solving question
+20009,25,6,concept
+20080,167,5,solving question
+20105,68,1,solving question
+20306,95,5,solving question
+20307,170,6,concept
+20474,95,5,concept
+20506,184,7,concept
+20534,30,2,solving question
+20584,85,6,concept
+20590,145,7,concept
+20763,14,6,concept
+20791,45,5,concept
+20804,174,5,solving question
+20843,161,3,solving question
+20852,153,7,concept
+21094,161,3,solving question
+21152,20,2,solving question
+21168,106,3,concept
+21169,151,5,starter
+21411,163,2,solving question
+21509,66,5,solving question
+21557,109,6,solving question
+21597,116,5,concept
+21747,9,1,solving question
+21852,17,2,concept
+21887,119,2,concept
+21926,174,6,concept
+22034,64,5,concept
+22042,37,7,solving question
+22054,134,6,concept
+22056,45,5,solving question
+22089,174,5,concept
+22101,105,2,solving question
+22135,134,5,solving question
+22326,182,6,concept
+22353,156,6,concept
+22357,127,6,concept
+22362,73,5,concept
+22390,157,3,solving question
+22596,177,6,concept
+22619,159,6,concept
+22711,65,6,concept
+22792,161,4,solving question
+22817,151,5,solving question
+22836,123,5,solving question
+22938,36,1,solving question
+23144,75,6,concept
+23165,127,5,concept
+23223,74,4,solving question
+23239,18,7,concept
+23262,66,5,concept
+23336,53,5,concept
+23405,114,2,solving question
+23716,153,7,concept
+23717,180,5,solving question
+23732,82,4,solving question
+23815,113,3,concept
+23841,96,6,concept
+23855,106,4,concept
+24149,114,2,solving question
+24250,109,5,concept
+24335,96,6,solving question
+24402,149,1,concept
+24558,73,6,solving question
+24570,152,5,solving question
+24633,83,4,concept
+24697,132,5,concept
+24758,163,2,solving question
+24870,180,6,concept
+24901,82,3,solving question
+24908,27,6,solving question
+24910,79,6,solving question
+24985,44,5,concept
+25004,97,7,concept
+25089,114,2,solving question
+25121,89,5,solving question
+25401,128,5,concept
+25843,164,1,concept
+25857,116,6,solving question
+25876,95,6,concept
+26004,168,5,solving question
+26052,183,4,concept
+26183,79,6,concept
+26335,170,5,concept
+26348,78,5,solving question
+26382,111,1,solving question
+26404,52,5,solving question
+26516,1,5,concept
+26711,55,6,concept
+26852,148,2,concept
+26921,168,5,concept
+26946,113,3,solving question
+27022,79,5,concept
+27043,144,4,concept
+27054,103,4,concept
+27115,8,5,concept
+27204,118,7,concept
+27264,34,5,solving question
+27339,15,5,concept
+27400,61,1,solving question
+27402,8,5,solving question
+27414,173,6,solving question
+27463,114,2,solving question
+27507,1,5,solving question
+27683,181,6,concept
+27684,118,7,concept
+27699,129,2,intention
+27728,136,3,solving question
+27845,108,5,concept
+27851,134,5,solving question
+27954,156,5,solving question
+28034,136,4,solving question
+28098,166,6,solving question
+28122,30,2,solving question
+28136,91,6,concept
+28349,68,1,concept
+28455,85,5,concept
+28511,115,5,concept
+28527,50,7,concept
+28569,27,6,starter
+28621,175,5,concept
+28921,52,5,concept
+29082,53,5,solving question
+29171,119,2,solving question
+29544,30,2,concept
+29559,113,4,solving question
+29577,13,1,solving question
+29579,23,5,concept
+29680,61,1,concept
+29695,27,6,concept
+29722,184,7,solving question
+30065,176,2,solving question
+30100,72,5,solving question
+30127,13,1,concept
+30159,129,2,solving question
+30194,19,7,concept
+30207,43,5,concept
+30248,70,1,solving question
+30251,176,2,solving question
+30276,94,1,solving question
+30284,128,5,solving question
+30455,44,6,concept
+30496,48,5,solving question
+30609,137,2,concept
+30671,54,6,concept
+30681,106,4,solving question
+30687,159,5,solving question
+30722,65,5,solving question
+30943,169,4,concept
+30958,2,2,concept
+31077,130,1,concept
+31108,115,6,concept
+31421,4,6,concept
+31440,125,5,solving question
+31589,7,5,concept
+31595,170,5,solving question
+31613,161,3,concept
+31657,75,5,concept
+31763,116,5,solving question
+31987,104,1,solving question
+32018,172,5,concept
+32023,69,2,solving question
+32095,42,7,solving question
+32135,64,5,solving question
+32146,0,7,solving question
+32168,136,4,concept
+32175,82,4,concept
+32264,133,6,concept
+32312,176,2,concept
+32491,179,5,solving question
+32535,8,5,solving question
+32570,113,3,solving question
+32604,24,6,concept
+32625,142,2,concept
+32736,82,3,concept

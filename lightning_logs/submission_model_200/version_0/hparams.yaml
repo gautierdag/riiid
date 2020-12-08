@@ -1,0 +1,16 @@
+activation: relu
+batch_size: 256
+dim_feedforward: 512
+dropout: 0.0
+emb_dim: 128
+learning_rate: 0.0001
+max_window_size: 200
+n_content_id: 13524
+n_decoder_layers: 4
+n_encoder_layers: 4
+n_heads: 2
+n_part: 8
+n_tags: 189
+num_user_train: 300000
+num_user_val: 30000
+validate_on_sequence: true

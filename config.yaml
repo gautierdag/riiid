@@ -5,10 +5,14 @@ n_heads: 2
 n_encoder_layers: 2
 n_decoder_layers: 2
 dim_feedforward: 256
-batch_size: 1
+batch_size: 512
 num_user_train: 300000
 num_user_val: 30000
 max_window_size: 100
-num_workers: 0
-hydra:
-  output_subdir: null
+num_workers: 6
+# hydra:
+#   output_subdir: null
+#   launcher:
+#     n_jobs: 2
+# defaults:
+#   - hydra/launcher: joblib

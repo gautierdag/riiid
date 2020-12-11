@@ -14,10 +14,9 @@ import hydra
 from dataset import RIIDDataset, collate_fn
 from model import RIIDDTransformerModel
 from preprocessing import get_users, generate_h5
+from utils import get_wd
 
 SEED = 69
-WORKING_DIR = ""
-
 seed_everything(SEED)
 
 
@@ -63,7 +62,7 @@ def train(cfg) -> None:
         batch_size=batch_size,
         # Weighted sampler
         sampler=torch.utils.data.WeightedRandomSampler(
-            weights=user_weights.values[train_dataset.indices],
+            weights=user_weights[train_dataset.indices],
             num_samples=len(train_dataset),
         ),
         collate_fn=collate_fn,
@@ -75,7 +74,7 @@ def train(cfg) -> None:
         batch_size=512,
         collate_fn=collate_fn,
         sampler=torch.utils.data.WeightedRandomSampler(
-            weights=user_weights.values[val_dataset.indices],
+            weights=user_weights[val_dataset.indices],
             num_samples=len(val_dataset),
         ),
         num_workers=num_workers,
@@ -98,8 +97,8 @@ def train(cfg) -> None:
     )
 
     logger = TensorBoardLogger(
-        "lightning_logs",
-        name=f"e{emb_dim}h{n_heads}d{dropout}el{n_decoder_layers}dl{n_decoder_layers}f{dim_feedforward}b{batch_size}n{num_user_train}w{max_window_size}",
+        f"{get_wd()}lightning_logs",
+        name=f"e{emb_dim}_h{n_heads}_d{dropout}_el{n_decoder_layers}_dl{n_decoder_layers}_f{dim_feedforward}_b{batch_size}_n{num_user_train}_w{max_window_size}",
     )
 
     # Initialize a trainer

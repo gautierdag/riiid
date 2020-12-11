@@ -1,0 +1,5 @@
+{
+    "python.pythonPath": "/home/ubuntu/anaconda3/envs/kaggle/bin/python",
+    "python.formatting.provider": "black",
+    "editor.formatOnPaste": false
+}

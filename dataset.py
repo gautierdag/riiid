@@ -1,4 +1,16 @@
+import torch
+from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
+
+import numpy as np
+import h5py
+
+from preprocessing import (
+    get_time_elapsed_from_timestamp,
+    questions_lectures_tags,
+    questions_lectures_parts,
+)
+from utils import get_wd
 
 
 class RIIDDataset(Dataset):
@@ -7,8 +19,8 @@ class RIIDDataset(Dataset):
     def __init__(
         self,
         user_mapping,
-        hdf5_file="feats_train.h5",
-        window_size=WINDOW_SIZE,
+        hdf5_file="feats.h5",
+        window_size=100,
         only_start=False,
     ):
         """
@@ -18,7 +30,7 @@ class RIIDDataset(Dataset):
         """
         # np array where index maps to a user id
         self.user_mapping = user_mapping
-        self.hdf5_file = hdf5_file
+        self.hdf5_file = f"{get_wd()}{hdf5_file}"
         self.max_window_size = window_size
         # whether to only use the beggining [0,... window_size] elements
         self.only_start = only_start
@@ -72,6 +84,16 @@ class RIIDDataset(Dataset):
             source_sel=np.s_[start_index : start_index + window_size],
             dest_sel=np.s_[0:window_size],
         )
+        self.f[f"{user_id}/prior_question_elapsed_time"].read_direct(
+            prior_q_times,
+            source_sel=np.s_[start_index : start_index + window_size],
+            dest_sel=np.s_[0:window_size],
+        )
+        self.f[f"{user_id}/prior_question_had_explanation"].read_direct(
+            prior_q_explanation,
+            source_sel=np.s_[start_index : start_index + window_size],
+            dest_sel=np.s_[0:window_size],
+        )
 
         # convert timestamps to time elapsed
         time_elapsed_timestamps = get_time_elapsed_from_timestamp(timestamps)
@@ -103,6 +125,8 @@ class RIIDDataset(Dataset):
             "answered_correctly": torch.from_numpy(answered_correctly),
             "answers": torch.from_numpy(answers),
             "timestamps": torch.from_numpy(time_elapsed_timestamps),
+            "prior_q_times": torch.from_numpy(prior_q_times),
+            "prior_q_explanation": torch.from_numpy(prior_q_explanation),
             "length": window_size,
         }
 
@@ -128,6 +152,8 @@ def collate_fn(batch):
         ("answers", 3),
         ("timestamps", 0.0),  # note timestamps isnt an embedding
         ("tags", 188),
+        ("prior_q_times", 0),
+        ("prior_q_explanation", 0),
     ]:
         items[key] = pad_sequence(
             [batch_item[key] for batch_item in batch],

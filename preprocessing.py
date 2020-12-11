@@ -1,66 +1,112 @@
+import os.path
+import pickle
 import numpy as np
 import pandas as pd
-import seaborn as sns
-
-import math
-import os
-import sys
-
+from tqdm import tqdm
 import h5py
 
-import torch
-from torch import nn as nn
-from torch.nn import functional as F
-from torch.utils.data import DataLoader, Dataset, random_split
-
-import pytorch_lightning as pl
-from pytorch_lightning.metrics.functional import accuracy
-from pytorch_lightning import seed_everything
-
-from tqdm.auto import tqdm
+from utils import get_wd
 
 eps = 0.0000001
+DATA_FOLDER_PATH = "data"
 
 
-folder_path = "data"
-print("Loading lectures")
-lectures_df = pd.read_csv("lectures.csv")
-lectures_parts = np.load(f"{folder_path}/lectures_parts.npy")
-lectures_types = np.load(f"{folder_path}/lectures_types.npy")
-print("Loading questions")
-questions_parts = np.load(f"{folder_path}/questions_parts.npy")
-questions_df = pd.read_csv("questions.csv")
-
-# process tags
-def split_tags(t):
+def get_users(df=None):
+    """
+    Gets the user ids and sampling weights as np array
+    """
+    if df:
+        user_weights = df.groupby("user_id").row_id.count().clip(upper=500)
+        return user_weights.index.values, user_weights.values
     try:
-        return [int(i) for i in t.split(" ")]
-    except AttributeError:
-        return list()
+        user_ids = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/user_ids.npy")
+        user_weights = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/user_weights.npy")
+    except FileNotFoundError:
+        df = pd.read_pickle("riiid_train.pkl.gzip")[["user_id", "row_id"]]
+        user_weights = df.groupby("user_id").row_id.count().clip(upper=500)
+        user_ids = user_weights.index.values
+        np.save(f"{get_wd()}{DATA_FOLDER_PATH}/user_ids.npy", user_ids)
+        np.save(f"{get_wd()}{DATA_FOLDER_PATH}/user_weights.npy", user_weights)
+    return user_ids, user_weights
 
 
-questions_lectures_parts = np.concatenate([questions_parts, lectures_parts])
+def get_questions_lectures_parts():
+    try:
+        questions_lectures_parts = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_parts.npy"
+        )
+    except FileNotFoundError:
+        questions_parts = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/questions_parts.npy")
+        lectures_parts = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/lectures_parts.npy")
+        questions_lectures_parts = np.concatenate([questions_parts, lectures_parts])
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_parts.npy",
+            questions_lectures_parts,
+        )
+    return questions_lectures_parts
 
-# Get tags to be 2D array of shape (Q, T), where Q is question_idx, and T is the max number of tag possible (6)
-questions_df["tags"] = questions_df.tags.apply(split_tags)
-questions_tags = pd.DataFrame(questions_df["tags"].tolist(), index=questions_df.index)
 
-# map lecture id to new id
-lectures_mapping = dict(
-    zip(lectures_df.lecture_id.values, (lectures_df.index + 13523).values)
-)
-lectures_df.lecture_id = lectures_df.index + 13523
-lectures_tags = pd.DataFrame(
-    lectures_df.tag.values, index=lectures_df.lecture_id.values
-)
+def get_questions_lectures_tags():
+    try:
+        questions_lectures_tags = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_tags.npy"
+        )
+    except FileNotFoundError:
+        lectures_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/lectures.csv")
+        questions_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/questions.csv")
 
-questions_lectures_tags = pd.concat([questions_tags, lectures_tags])
-# pad with max tag + 1
-questions_lectures_tags = (
-    questions_lectures_tags.fillna(questions_lectures_tags.max().max() + 1)
-    .astype(np.int)
-    .values
-)
+        # process tags
+        def split_tags(t):
+            try:
+                return [int(i) for i in t.split(" ")]
+            except AttributeError:
+                return list()
+
+        # Get tags to be 2D array of shape (Q, T), where Q is question_idx, and T is the max number of tag possible (6)
+        questions_df["tags"] = questions_df.tags.apply(split_tags)
+        questions_tags = pd.DataFrame(
+            questions_df["tags"].tolist(), index=questions_df.index
+        )
+        lectures_tags = pd.DataFrame(
+            lectures_df.tag.values, index=lectures_df.index.values + 13523
+        )
+
+        questions_lectures_tags = pd.concat([questions_tags, lectures_tags])
+        # pad with max tag + 1
+        questions_lectures_tags = (
+            questions_lectures_tags.fillna(questions_lectures_tags.max().max() + 1)
+            .astype(np.int)
+            .values
+        )
+
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_tags.npy",
+            questions_lectures_tags,
+        )
+    return questions_lectures_tags
+
+
+def get_lectures_mapping():
+    try:
+        lectures_mapping = pickle.load(
+            open(f"{get_wd()}{DATA_FOLDER_PATH}/lectures_mapping.p", "rb")
+        )
+    except FileNotFoundError:
+        lectures_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/lectures.csv")
+        # map lecture id to new id
+        lectures_mapping = dict(
+            zip(lectures_df.lecture_id.values, (lectures_df.index + 13523).values)
+        )
+        pickle.dump(
+            lectures_mapping,
+            open(f"{get_wd()}{DATA_FOLDER_PATH}/lectures_mapping.p", "wb"),
+        )
+    return lectures_mapping
+
+
+lectures_mapping = get_lectures_mapping()
+questions_lectures_parts = get_questions_lectures_parts()
+questions_lectures_tags = get_questions_lectures_tags()
 
 
 def preprocess_df(df):
@@ -71,9 +117,9 @@ def preprocess_df(df):
     df.content_type_id = df.content_type_id.astype(bool)
 
     # prior information
-    df.prior_question_had_explanation = df.prior_question_had_explanation.astype(
-        np.uint8
-    )
+    df.prior_question_had_explanation = df.prior_question_had_explanation.fillna(
+        0
+    ).astype(np.uint8)
     df.prior_question_elapsed_time = (
         df.prior_question_elapsed_time.fillna(0).clip(upper=300000) / 300000
     )  # normalizes to 0-1
@@ -95,14 +141,22 @@ def get_time_elapsed_from_timestamp(arr):
     return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
 
 
-def generate_h5(df, file_name="train_feats.h5"):
+def generate_h5(file_name="feats.h5"):
+    file_name = f"{get_wd()}{file_name}"
+    if os.path.isfile(file_name):
+        return
+
+    print("Generating feats h5")
+    print("Reading pickle")
+    df = pd.read_pickle(f"{get_wd()}riiid_train.pkl.gzip")
+    print("Preprocessing")
     df = preprocess_df(df)
     df.answered_correctly.replace(
         -1, 4, inplace=True
     )  # set lecture to token 4 for answered correctly
 
+    print("Creating h5")
     hf = h5py.File(file_name, "w")
-
     for user_id, data in tqdm(df.groupby("user_id")):
         processed_feats = data[
             [

@@ -1,6 +1,16 @@
+import matplotlib.pyplot as plt
+import matplotlib.style as style
+
+style.use("fivethirtyeight")
+import seaborn as sns
+
+import math
+import torch
+from torch import nn as nn
+from torch.nn import functional as F
+import pytorch_lightning as pl
 from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
 def init_weights(m):
@@ -104,7 +114,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             0,
             (
                 torch.minimum(
-                    torch.ones(lengths.shape, device=self.device) * 10, lengths
+                    torch.ones(lengths.shape, device=self.device) * max_steps, lengths
                 )
             ).float(),
         )
@@ -204,7 +214,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         sequence_indexes = []
 
         for i in range(steps.max().int(), 0, -1):
-            preds = model.process_batch_step(batch)
+            preds = self.process_batch_step(batch)
 
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
@@ -271,7 +281,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         user_indexes = []
         sequence_indexes = []
         for i in range(steps.max().int(), 0, -1):
-            preds = model.process_batch_step(batch)
+            preds = self.process_batch_step(batch)
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
             # set answer to either 0 or 1 if not lecture

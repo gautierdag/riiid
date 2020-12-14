@@ -13,9 +13,29 @@ from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
 
 
-from pytorch_lightning.core.decorators import auto_move_data
-from pytorch_lightning.metrics.functional.classification import auroc
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
+def init_weights(m):
+    if type(m) == nn.Linear:
+        torch.nn.init.xavier_uniform_(m.weight)
+        torch.nn.init.zeros_(m.bias)
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=1000):
+        super(PositionalEncoding, self).__init__()
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer("pe", pe)
+
+    def forward(self, sequence_length):
+        # returns embeds (sequence_length, 1, d_model)
+        return self.pe[:sequence_length, :]
 
 
 def init_weights(m):
@@ -58,9 +78,6 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_decoder_layers: int = 2,
         dim_feedforward: int = 256,
         activation: str = "relu",
-        batch_size=256,  # will get saved as hyperparam
-        num_user_train=300000,  # will get saved as hyperparam
-        num_user_val=30000,  # will get saved as hyperparam
         max_window_size=100,
         use_prior_q_times=False,
         use_prior_q_explanation=False,
@@ -69,8 +86,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.model_type = "RiiidTransformer"
         self.learning_rate = learning_rate
         self.max_window_size = max_window_size
-        
-        
+
         self.use_prior_q_times = use_prior_q_times
         self.use_prior_q_explanation = use_prior_q_explanation
 
@@ -151,11 +167,11 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     def randomize_evaluation_step(self, batch, max_steps=10):
         # randomize new lengths (for where start token is present)
-        batch["length"] = torch.where(
-            batch["answers"][0, :] == 2,
-            self.get_random_lengths(batch["length"]),
-            batch["length"],
-        )
+        # batch["length"] = torch.where(
+        #     batch["answers"][0, :] == 2,
+        #     self.get_random_lengths(batch["length"]),
+        #     batch["length"],
+        # )
         # randomize number of steps based on new random lengths
         batch["steps"] = self.get_random_steps(batch["length"], max_steps=max_steps)
         return batch
@@ -197,27 +213,35 @@ class RIIDDTransformerModel(pl.LightningModule):
         ).sum(dim=3)
 
         # sequence that will go into decoder
-        embeded_responses = self.embed_answered_correctly(answers)
+        embeded_answered_correctly = self.embed_answered_correctly(answers)
         embeded_timestamps = self.embed_timestamps(timestamps.unsqueeze(2))
-        
-        exercise_sequence_components = [embeded_responses, embeded_timestamps]
+        r_w = F.softmax(self.response_weights, dim=0)
+
+        exercise_sequence_components = [embeded_answered_correctly, embeded_timestamps]
         if self.use_prior_q_times:
             embeded_q_times = self.embed_prior_q_time(prior_q_times.unsqueeze(2))
+            # zero embedding - if start token
+            embeded_q_times[0, torch.where(answers[0, :] == 2)[0], :] = 0
             exercise_sequence_components.append(embeded_q_times)
         if self.use_prior_q_explanation:
             embeded_q_explanation = self.embed_prior_q_explanation(prior_q_explanation)
+            # zero embedding - if start token
+            embeded_q_explanation[0, torch.where(answers[0, :] == 2)[0], :] = 0
             exercise_sequence_components.append(embeded_q_explanation)
-        
-        r_w = F.softmax(self.response_weights, dim=0)
-        embeded_response = (
+
+        embeded_responses = (
             torch.stack(exercise_sequence_components, dim=3) * r_w
         ).sum(dim=3)
 
-
         # adding positional vector
-        embedded_positions = self.pos_encoder(sequence_length)
-        embeded_responses = embeded_responses + embedded_positions
-        embeded_exercise_sequence = embeded_exercise_sequence + embedded_positions
+        embedded_positions = self.pos_encoder(sequence_length + 1)
+
+        # add shifted position embedding ( start token is first position)
+        embeded_responses = embeded_responses + embedded_positions[:-1, :, :]
+
+        embeded_exercise_sequence = (
+            embeded_exercise_sequence + embedded_positions[1:, :, :]
+        )
 
         # mask of shape S x S -> prevents attention looking forward
         top_right_attention_mask = self.generate_square_subsequent_mask(
@@ -253,7 +277,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         only for those steps (flattened)
         steps: tensor of length B where each item is the number of steps that need to be taken
         """
-        n_users = batch["content_ids"].shape[1]
+        seq_length, n_users = batch["content_ids"].shape
         lengths = batch["length"]
 
         users = torch.arange(n_users)
@@ -436,11 +460,11 @@ class RIIDDTransformerModel(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="max", patience=10
+                optimizer, mode="max", patience=5
             ),
             "monitor": "avg_val_auc",
-            "interval": "epoch",
-            "frequency": 1,
+            "interval": "step",
+            "frequency": 1000,
             "strict": True,
         }
 

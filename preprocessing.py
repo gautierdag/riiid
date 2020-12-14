@@ -11,25 +11,6 @@ eps = 0.0000001
 DATA_FOLDER_PATH = "data"
 
 
-def get_users(df=None):
-    """
-    Gets the user ids and sampling weights as np array
-    """
-    if df:
-        user_weights = df.groupby("user_id").row_id.count().clip(upper=500)
-        return user_weights.index.values, user_weights.values
-    try:
-        user_ids = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/user_ids.npy")
-        user_weights = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/user_weights.npy")
-    except FileNotFoundError:
-        df = pd.read_pickle("riiid_train.pkl.gzip")[["user_id", "row_id"]]
-        user_weights = df.groupby("user_id").row_id.count().clip(upper=500)
-        user_ids = user_weights.index.values
-        np.save(f"{get_wd()}{DATA_FOLDER_PATH}/user_ids.npy", user_ids)
-        np.save(f"{get_wd()}{DATA_FOLDER_PATH}/user_weights.npy", user_weights)
-    return user_ids, user_weights
-
-
 def get_questions_lectures_parts():
     try:
         questions_lectures_parts = np.load(
@@ -141,14 +122,11 @@ def get_time_elapsed_from_timestamp(arr):
     return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
 
 
-def generate_h5(file_name="feats.h5"):
-    file_name = f"{get_wd()}{file_name}"
+def generate_h5(df, file_name="feats.h5"):
     if os.path.isfile(file_name):
         return
 
     print("Generating feats h5")
-    print("Reading pickle")
-    df = pd.read_pickle(f"{get_wd()}riiid_train.pkl.gzip")
     print("Preprocessing")
     df = preprocess_df(df)
     df.answered_correctly.replace(

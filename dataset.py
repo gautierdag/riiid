@@ -19,21 +19,22 @@ class RIIDDataset(Dataset):
     def __init__(
         self,
         user_mapping,
+        user_history,
         hdf5_file="feats.h5",
         window_size=100,
-        only_start=False,
     ):
         """
         Args:
-            user_mapping (np.array): array of all unique user ids
+            user_mapping (np.array): array of user_ids per row
+            user_history (np.array): array of length of history up till this row
             hdf5_file (string): location of hf5 feats file
         """
         # np array where index maps to a user id
         self.user_mapping = user_mapping
+        self.user_history = user_history
         self.hdf5_file = f"{get_wd()}{hdf5_file}"
         self.max_window_size = window_size
-        # whether to only use the beggining [0,... window_size] elements
-        self.only_start = only_start
+        
 
     def open_hdf5(self):
         # opens the h5py file
@@ -53,7 +54,8 @@ class RIIDDataset(Dataset):
             idx = idx.tolist()
 
         user_id = self.user_mapping[idx]
-        length = self.f[f"{user_id}/answered_correctly"].len()
+        length = self.user_history[idx]
+        # length = self.f[f"{user_id}/answered_correctly"].len()
 
         window_size = min(self.max_window_size, length)
 
@@ -65,9 +67,9 @@ class RIIDDataset(Dataset):
 
         # index for loading larger than window size
         start_index = 0
-        if length > window_size and not self.only_start:
+        if length > window_size:
             # randomly select window size subset instead of trying to cram in everything
-            start_index = np.random.randint(length - window_size)
+            start_index = length - window_size
 
         self.f[f"{user_id}/content_ids"].read_direct(
             content_ids,

@@ -13,6 +13,11 @@ from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
 
 
+from pytorch_lightning.core.decorators import auto_move_data
+from pytorch_lightning.metrics.functional.classification import auroc
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+
+
 def init_weights(m):
     if type(m) == nn.Linear:
         torch.nn.init.xavier_uniform_(m.weight)
@@ -57,26 +62,48 @@ class RIIDDTransformerModel(pl.LightningModule):
         num_user_train=300000,  # will get saved as hyperparam
         num_user_val=30000,  # will get saved as hyperparam
         max_window_size=100,
+        use_prior_q_times=False,
+        use_prior_q_explanation=False,
     ):
         super(RIIDDTransformerModel, self).__init__()
         self.model_type = "RiiidTransformer"
         self.learning_rate = learning_rate
         self.max_window_size = max_window_size
+        
+        
+        self.use_prior_q_times = use_prior_q_times
+        self.use_prior_q_explanation = use_prior_q_explanation
 
         # save params of models to yml
         self.save_hyperparameters()
 
+        #### EXERCISE SEQUENCE
         self.embed_content_id = nn.Embedding(n_content_id, emb_dim, padding_idx=13942)
         self.embed_parts = nn.Embedding(n_part, emb_dim, padding_idx=0)
         self.embed_tags = nn.Embedding(n_tags, emb_dim, padding_idx=188)
+
         # exercise weights to weight the mean embeded excercise embeddings
         self.exercise_weights = torch.nn.Parameter(torch.tensor([0.35, 0.55, 0.1]))
 
+        ### RESPONSE SEQUENCE (1st time stamp of sequence is useless)
         self.embed_answered_correctly = nn.Embedding(
             n_correct, emb_dim, padding_idx=3
         )  # 2 + 1 for start token + 1 for padding_idn_inputs
 
         self.embed_timestamps = nn.Linear(1, emb_dim)
+
+        # embed prior q time and q explanation
+        self.embed_prior_q_time = nn.Linear(1, emb_dim)
+        self.embed_prior_q_explanation = nn.Embedding(2, emb_dim)
+
+        # response weights to weight the mean embeded response embeddings
+        w = [0.5, 0.5]
+        if use_prior_q_times:
+            w.append(0.5)
+        if use_prior_q_explanation:
+            w.append(0.5)
+
+        self.response_weights = torch.nn.Parameter(torch.tensor([w]))
 
         self.pos_encoder = PositionalEncoding(emb_dim)
 
@@ -104,17 +131,14 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     def get_random_steps(self, lengths, max_steps=10):
         """
-        for a length x
-            if x >= 10:
-                returns a random integer between 1 - 10
-            else:
-                returns a random integer between 1 - x
+        for x return integer between 1 - 10 or 
+        between 1 - x if x < 10
         """
         m = torch.distributions.uniform.Uniform(
             0,
             (
                 torch.minimum(
-                    torch.ones(lengths.shape, device=self.device) * max_steps, lengths
+                    torch.ones(lengths.shape, device=self.device) * 10, lengths
                 )
             ).float(),
         )
@@ -137,7 +161,16 @@ class RIIDDTransformerModel(pl.LightningModule):
         return batch
 
     @auto_move_data
-    def forward(self, content_ids, parts, answers, tags, timestamps):
+    def forward(
+        self,
+        content_ids,
+        parts,
+        answers,
+        tags,
+        timestamps,
+        prior_q_times,
+        prior_q_explanation,
+    ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
 
@@ -148,6 +181,8 @@ class RIIDDTransformerModel(pl.LightningModule):
             answers = answers.unsqueeze(1)
             tags = tags.unsqueeze(1)
             timestamps = timestamps.unsqueeze(1)
+            prior_q_times = prior_q_times.unsqueeze(1)
+            prior_q_explanation = prior_q_explanation.unsqueeze(1)
 
         sequence_length = content_ids.shape[0]
 
@@ -158,15 +193,26 @@ class RIIDDTransformerModel(pl.LightningModule):
         e_w = F.softmax(self.exercise_weights, dim=0)
 
         embeded_exercise_sequence = (
-            (embeded_content * e_w[0])
-            + (embeded_parts * e_w[1])
-            + (embeded_tags * e_w[2])
-        )
+            torch.stack([embeded_content, embeded_parts, embeded_tags], dim=3) * e_w
+        ).sum(dim=3)
 
         # sequence that will go into decoder
         embeded_responses = self.embed_answered_correctly(answers)
         embeded_timestamps = self.embed_timestamps(timestamps.unsqueeze(2))
-        embeded_responses = (embeded_responses + embeded_timestamps) * 0.5
+        
+        exercise_sequence_components = [embeded_responses, embeded_timestamps]
+        if self.use_prior_q_times:
+            embeded_q_times = self.embed_prior_q_time(prior_q_times.unsqueeze(2))
+            exercise_sequence_components.append(embeded_q_times)
+        if self.use_prior_q_explanation:
+            embeded_q_explanation = self.embed_prior_q_explanation(prior_q_explanation)
+            exercise_sequence_components.append(embeded_q_explanation)
+        
+        r_w = F.softmax(self.response_weights, dim=0)
+        embeded_response = (
+            torch.stack(exercise_sequence_components, dim=3) * r_w
+        ).sum(dim=3)
+
 
         # adding positional vector
         embedded_positions = self.pos_encoder(sequence_length)
@@ -196,6 +242,8 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["answers"],
             batch["tags"],
             batch["timestamps"],
+            batch["prior_q_times"],
+            batch["prior_q_explanation"],
         )
 
     @auto_move_data
@@ -219,11 +267,17 @@ class RIIDDTransformerModel(pl.LightningModule):
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
 
+            # get index for which to update the answers
+            # since answers is shifted we want to map preds 0..98 -> answers 1:99
+            answers_idx = torch.where(sequence_indexes_at_i + 1 != seq_length)
+            a_seq_idx = sequence_indexes_at_i[answers_idx] + 1
+            u_seq_idx = user_indexes_at_i[answers_idx]
+
             # set answer to either 0 or 1 if not lecture
-            batch["answers"][sequence_indexes_at_i, user_indexes_at_i] = torch.where(
-                batch["answers"][sequence_indexes_at_i, user_indexes_at_i] != 4,
-                (preds[sequence_indexes_at_i, user_indexes_at_i] > 0.5).long(),
-                4,
+            batch["answers"][a_seq_idx, u_seq_idx] = torch.where(
+                batch["answers"][a_seq_idx, u_seq_idx] != 4,
+                (preds[sequence_indexes_at_i[answers_idx], u_seq_idx] > 0.5).long(),
+                batch["answers"][a_seq_idx, u_seq_idx],
             )
 
             user_indexes.append(user_indexes_at_i)
@@ -253,11 +307,15 @@ class RIIDDTransformerModel(pl.LightningModule):
         for i in range(n, 0, -1):
             preds = self(content_ids, parts, answers, tags, timestamps)
             out_predictions[n - i] = preds[length - i, 0]
-            answers[length - i] = torch.where(
-                answers[length - i] != 4,
-                (preds[length - i, 0] > 0.5).long(),
-                4,
-            )
+
+            # answers are shifted (start token) so need + 1
+            answer_idx = length - i + 1
+            # don't update if at end of answers
+            if answer_idx + 1 < len(answers):
+                # don't update if true is lecture
+                if answers[answer_idx] != 4:
+                    answers[answer_idx] = (preds[length - i, 0] > 0.5).long()
+
         return out_predictions
 
     def training_step(self, batch, batch_nb):
@@ -275,6 +333,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         steps: tensor of length B where each item is the number of steps that need to be taken
         """
         n_users = batch["content_ids"].shape[1]
+        seq_length = batch["answers"].shape[0]
         lengths = batch["length"]
         steps = batch["steps"]
         users = torch.arange(n_users)
@@ -284,12 +343,20 @@ class RIIDDTransformerModel(pl.LightningModule):
             preds = self.process_batch_step(batch)
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
+
+            # get index for which to update the answers
+            # since answers is shifted we want to map preds 0..98 -> answers 1:99
+            answers_idx = torch.where(sequence_indexes_at_i + 1 != seq_length)
+            a_seq_idx = sequence_indexes_at_i[answers_idx] + 1
+            u_seq_idx = user_indexes_at_i[answers_idx]
+
             # set answer to either 0 or 1 if not lecture
-            batch["answers"][sequence_indexes_at_i, user_indexes_at_i] = torch.where(
-                batch["answers"][sequence_indexes_at_i, user_indexes_at_i] != 4,
-                (preds[sequence_indexes_at_i, user_indexes_at_i] > 0.5).long(),
-                4,
+            batch["answers"][a_seq_idx, u_seq_idx] = torch.where(
+                batch["answers"][a_seq_idx, u_seq_idx] != 4,
+                (preds[sequence_indexes_at_i[answers_idx], u_seq_idx] > 0.5).long(),
+                batch["answers"][a_seq_idx, u_seq_idx],
             )
+
             user_indexes.append(user_indexes_at_i)
             sequence_indexes.append(sequence_indexes_at_i)
 
@@ -316,8 +383,8 @@ class RIIDDTransformerModel(pl.LightningModule):
             result.shape[1] * [torch.arange(result.shape[0]).unsqueeze(1)], dim=1
         )
         return (
-            torch.masked_select(result, batch["loss_mask"] > 0),
-            torch.masked_select(batch["answered_correctly"], batch["loss_mask"] > 0),
+            torch.masked_select(result, select_mask),
+            torch.masked_select(batch["answered_correctly"], select_mask),
             torch.masked_select(positions, select_mask),
         )
 

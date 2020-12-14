@@ -67,7 +67,7 @@ def train(cfg) -> None:
     # Initialize a trainer
     trainer = pl.Trainer(
         gpus=1,
-        max_epochs=200,
+        max_epochs=5,
         progress_bar_refresh_rate=1,
         callbacks=[
             EarlyStopping(monitor="avg_val_auc", patience=10, mode="max"),
@@ -80,7 +80,7 @@ def train(cfg) -> None:
         ],
         logger=logger,
         val_check_interval=1000,  # check validation every 1000 step
-        limit_val_batches=0.10,  # run through only 25% of val every time
+        limit_val_batches=0.20,  # run through only 20% of val every time
     )
 
     # Train the model ⚡
@@ -91,7 +91,7 @@ def train(cfg) -> None:
     )
 
     # Test on Final Full validation set
-    trainer.test(test_dataloader=val_loader)
+    trainer.test(test_dataloaders=[val_loader])
 
 
 if __name__ == "__main__":

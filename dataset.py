@@ -231,7 +231,7 @@ def collate_fn(batch):
 
 def get_train_val_idxs(
     df,
-    train_size=20000000,
+    train_size=80000000,
     validation_size=2500000,
     new_user_prob=0.25,
     use_lectures=True,

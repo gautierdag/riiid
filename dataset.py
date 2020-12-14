@@ -166,17 +166,19 @@ class RIIDDataset(Dataset):
         # else replace first element of sequence with actual previous element
         else:
             self.f[f"{user_id}/answered_correctly"].read_direct(
-                answers, source_sel=np.s_[start_index - 1], dest_sel=np.s_[0],
+                answers,
+                source_sel=np.s_[start_index - 1],
+                dest_sel=np.s_[0],
             )
 
         return {
             "parts": torch.from_numpy(parts).long(),
             "tags": torch.from_numpy(tags).long(),
-            "content_ids": torch.from_numpy(content_ids),
-            "answered_correctly": torch.from_numpy(answered_correctly),
-            "answers": torch.from_numpy(answers),
-            "timestamps": torch.from_numpy(time_elapsed_timestamps),
-            "prior_q_times": torch.from_numpy(prior_q_times),
+            "content_ids": torch.from_numpy(content_ids).long(),
+            "answered_correctly": torch.from_numpy(answered_correctly).float(),
+            "answers": torch.from_numpy(answers).long(),
+            "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
+            "prior_q_times": torch.from_numpy(prior_q_times).float(),
             "prior_q_explanation": torch.from_numpy(prior_q_explanation).long(),
             "length": window_size,
         }
@@ -229,7 +231,7 @@ def collate_fn(batch):
 
 def get_train_val_idxs(
     df,
-    train_size=10000000,
+    train_size=20000000,
     validation_size=2500000,
     new_user_prob=0.25,
     use_lectures=True,
@@ -279,7 +281,7 @@ def get_dataloaders(
     else:
         h5_file_name = f"{get_wd()}feats.h5"
 
-    generate_h5(df, file_name=h5_file_name, use_lectures=use_lectures)
+    generate_h5(df, file_name=h5_file_name)
 
     print("Creating Dataset")
     user_mapping = df.user_id.values
@@ -291,10 +293,13 @@ def get_dataloaders(
         window_size=max_window_size,
         use_cache=True,
     )
-    len(dataset)
+    print(f"len(dataset): {len(dataset)}")
 
     print("Creating Train/Split")
     q_train_indices, q_valid_indices = get_train_val_idxs(df, use_lectures=use_lectures)
+
+    print(f"len(q_train_indices): {len(q_train_indices)}")
+    print(f"len(q_valid_indices): {len(q_valid_indices)}")
 
     # Init DataLoader from RIIID Dataset subset
     train_loader = DataLoader(
@@ -314,4 +319,3 @@ def get_dataloaders(
     )
 
     return train_loader, val_loader
-

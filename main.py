@@ -51,7 +51,6 @@ def train(cfg) -> None:
         n_encoder_layers=n_encoder_layers,
         n_decoder_layers=n_decoder_layers,
         dim_feedforward=dim_feedforward,
-        batch_size=batch_size,
         max_window_size=max_window_size,
         use_prior_q_times=use_prior_q_times,
         use_prior_q_explanation=use_prior_q_explanation,
@@ -59,9 +58,10 @@ def train(cfg) -> None:
 
     logger = TensorBoardLogger(
         f"{get_wd()}lightning_logs",
-        name=f"e{emb_dim}_h{n_heads}_d{dropout}"
+        name=f"e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
         + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
-        + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}",
+        + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
+        + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_qexplain_{use_prior_q_explanation}",
     )
 
     # Initialize a trainer
@@ -79,11 +79,15 @@ def train(cfg) -> None:
             LearningRateMonitor(logging_interval="step"),
         ],
         logger=logger,
+        val_check_interval=1000,  # check validation every 1000 step
+        limit_val_batches=0.10,  # run through only 25% of val every time
     )
 
     # Train the model ⚡
     trainer.fit(
-        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
+        model,
+        train_dataloader=train_loader,
+        val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set

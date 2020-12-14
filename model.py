@@ -147,7 +147,7 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     def get_random_steps(self, lengths, max_steps=10):
         """
-        for x return integer between 1 - 10 or 
+        for x return integer between 1 - 10 or
         between 1 - x if x < 10
         """
         m = torch.distributions.uniform.Uniform(
@@ -427,7 +427,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         ).flatten()
         fig, ax = plt.subplots(figsize=(12, 8))
         sns.regplot(
-            y=acc_per_position.cpu(), x=torch.arange(len(acc_per_position)).cpu(), ax=ax
+            y=acc_per_position.cpu().numpy(),
+            x=torch.arange(len(acc_per_position)).cpu().numpy(),
+            ax=ax,
         )
         ax.set_ylim(0.5, 1)
         ax.set_xlim(0, len(acc_per_position) - 1)

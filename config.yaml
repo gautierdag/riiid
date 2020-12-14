@@ -1,17 +1,19 @@
-learning_rate: 0.001
+learning_rate: 0.004
 emb_dim: 64
 dropout: 0.0
 n_heads: 2
 n_encoder_layers: 2
 n_decoder_layers: 2
 dim_feedforward: 256
-batch_size: 512
-num_user_train: 300000
-num_user_val: 30000
+batch_size: 2048
 max_window_size: 100
-num_workers: 6
+num_workers: 8
+use_lectures: False
+use_prior_q_times: False
+use_prior_q_explanation: False
+
 # hydra:
-#   output_subdir: null
+  # output_subdir: null
 #   launcher:
 #     n_jobs: 2
 # defaults:

@@ -412,39 +412,43 @@ class RIIDDTransformerModel(pl.LightningModule):
             torch.masked_select(positions, select_mask),
         )
 
-    def val_test_epoch_end(self, outputs, log_as="val"):
+    def val_test_epoch_end(self, outputs, log_as="val", plot_acc=False):
         y_pred = torch.cat([out[0] for out in outputs], dim=0)
         y = torch.cat([out[1] for out in outputs], dim=0)
         pos = torch.cat([out[2] for out in outputs], dim=0)
         auc = auroc(y_pred, y)
 
-        # Calculate accuracy per position
-        M = torch.zeros(pos.max() + 1, len(y), device=self.device)
-        M[pos, torch.arange(len(y))] = 1
-        M = torch.nn.functional.normalize(M, p=1, dim=1)
-        acc_per_position = torch.mm(
-            M, ((y_pred > 0.5) == y).float().unsqueeze(1)
-        ).flatten()
-        fig, ax = plt.subplots(figsize=(12, 8))
-        sns.regplot(
-            y=acc_per_position.cpu().numpy(),
-            x=torch.arange(len(acc_per_position)).cpu().numpy(),
-            ax=ax,
-        )
-        ax.set_ylim(0.5, 1)
-        ax.set_xlim(0, len(acc_per_position) - 1)
-        ax.set_ylabel("acc")
-        ax.set_xlabel("position")
+        if plot_acc:
+            # Calculate accuracy per position
+            M = torch.zeros(pos.max() + 1, len(y), device=self.device)
+            M[pos, torch.arange(len(y))] = 1
+            M = torch.nn.functional.normalize(M, p=1, dim=1)
+            acc_per_position = torch.mm(
+                M, ((y_pred > 0.5) == y).float().unsqueeze(1)
+            ).flatten()
+            fig, ax = plt.subplots(figsize=(12, 8))
+            sns.regplot(
+                y=acc_per_position.cpu().numpy(),
+                x=torch.arange(len(acc_per_position)).cpu().numpy(),
+                ax=ax,
+            )
+            ax.set_ylim(0.5, 1)
+            ax.set_xlim(0, len(acc_per_position) - 1)
+            ax.set_ylabel("acc")
+            ax.set_xlabel("position")
+
         if log_as == "val":
             self.log(f"avg_{log_as}_auc", auc, prog_bar=True)
-            self.logger.experiment.add_figure(
-                f"{log_as}_acc_per_pos", fig, global_step=self.current_epoch
-            )
+            if plot_acc:
+                self.logger.experiment.add_figure(
+                    f"{log_as}_acc_per_pos", fig, global_step=self.current_epoch
+                )
         else:
             self.log(f"avg_{log_as}_auc", auc)
-            self.logger.experiment.add_figure(
-                f"{log_as}_acc_per_pos", fig, global_step=1
-            )
+            if plot_acc:
+                self.logger.experiment.add_figure(
+                    f"{log_as}_acc_per_pos", fig, global_step=1
+                )
 
     def validation_step(self, batch, batch_nb, dataset_nb=None):
         return self.val_test_step(batch, log_as="val")

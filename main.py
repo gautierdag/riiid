@@ -56,12 +56,11 @@ def train(cfg) -> None:
         use_prior_q_explanation=use_prior_q_explanation,
     )
 
+    # experiment_name = f"e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"+ f"_el{n_decoder_layers}_dl{n_decoder_layers}"+ f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"+ f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_qexplain_{use_prior_q_explanation}"
+    experiment_name = "bling_bling"
     logger = TensorBoardLogger(
         f"{get_wd()}lightning_logs",
-        name=f"e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
-        + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
-        + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
-        + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_qexplain_{use_prior_q_explanation}",
+        name=experiment_name,
     )
 
     # Initialize a trainer
@@ -79,8 +78,10 @@ def train(cfg) -> None:
             LearningRateMonitor(logging_interval="step"),
         ],
         logger=logger,
-        val_check_interval=1000,  # check validation every 1000 step
-        limit_val_batches=0.20,  # run through only 20% of val every time
+        val_check_interval=2500,  # check validation every validation_step
+        limit_val_batches=0.10,  # run through only 10% of val every time
+        # log_gpu_memory="all",
+        # accumulate_grad_batches=4,
     )
 
     # Train the model ⚡

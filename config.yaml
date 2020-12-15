@@ -1,15 +1,16 @@
-learning_rate: 0.004
+learning_rate: 0.001
 emb_dim: 64
 dropout: 0.0
-n_heads: 2
-n_encoder_layers: 2
-n_decoder_layers: 2
+n_heads: 4
+n_encoder_layers: 4
+n_decoder_layers: 4
 dim_feedforward: 256
-batch_size: 2048
-max_window_size: 100
+batch_size: 256
+validation_batch_size: 512
+max_window_size: 256
 num_workers: 8
-use_lectures: False
-use_prior_q_times: False
+use_lectures: True
+use_prior_q_times: True
 use_prior_q_explanation: False
 
 # hydra:

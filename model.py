@@ -3,6 +3,7 @@ import matplotlib.style as style
 
 style.use("fivethirtyeight")
 import seaborn as sns
+import gc
 
 import math
 import torch
@@ -176,7 +177,6 @@ class RIIDDTransformerModel(pl.LightningModule):
         batch["steps"] = self.get_random_steps(batch["length"], max_steps=max_steps)
         return batch
 
-    @auto_move_data
     def forward(
         self,
         content_ids,
@@ -320,7 +320,15 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     @auto_move_data
     def predict_fast_single_user(
-        self, content_ids, parts, answers, tags, timestamps, n=1
+        self,
+        content_ids,
+        parts,
+        answers,
+        tags,
+        timestamps,
+        prior_q_times,
+        prior_q_explanation,
+        n=1,
     ):
         """
         Predicts n steps for a single user in batch and return predictions
@@ -329,7 +337,15 @@ class RIIDDTransformerModel(pl.LightningModule):
         length = len(content_ids)
         out_predictions = torch.zeros(n, device=self.device)
         for i in range(n, 0, -1):
-            preds = self(content_ids, parts, answers, tags, timestamps)
+            preds = self(
+                content_ids,
+                parts,
+                answers,
+                tags,
+                timestamps,
+                prior_q_times,
+                prior_q_explanation,
+            )
             out_predictions[n - i] = preds[length - i, 0]
 
             # answers are shifted (start token) so need + 1
@@ -347,7 +363,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         loss = F.binary_cross_entropy(
             result, batch["answered_correctly"], weight=batch["loss_mask"]
         )
-        self.log("train_loss", loss)
+        self.log("train_loss", loss.cpu())
         return loss
 
     def validate_n_steps(self, batch, max_steps=10):
@@ -401,7 +417,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         loss = F.binary_cross_entropy(
             result, batch["answered_correctly"], weight=batch["loss_mask"]
         )
-        self.log(f"{log_as}_loss_step", loss)
+        self.log(f"{log_as}_loss_step", loss.cpu())
         select_mask = batch["loss_mask"] > 0
         positions = torch.cat(
             result.shape[1] * [torch.arange(result.shape[0]).unsqueeze(1)], dim=1
@@ -413,12 +429,12 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
 
     def val_test_epoch_end(self, outputs, log_as="val", plot_acc=False):
-        y_pred = torch.cat([out[0] for out in outputs], dim=0)
-        y = torch.cat([out[1] for out in outputs], dim=0)
-        pos = torch.cat([out[2] for out in outputs], dim=0)
+        y_pred = torch.cat([out[0] for out in outputs], dim=0).cpu()
+        y = torch.cat([out[1] for out in outputs], dim=0).cpu()
         auc = auroc(y_pred, y)
 
         if plot_acc:
+            pos = torch.cat([out[2] for out in outputs], dim=0)
             # Calculate accuracy per position
             M = torch.zeros(pos.max() + 1, len(y), device=self.device)
             M[pos, torch.arange(len(y))] = 1
@@ -470,7 +486,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             ),
             "monitor": "avg_val_auc",
             "interval": "step",
-            "frequency": 1000,
+            "frequency": 2500,
             "strict": True,
         }
 

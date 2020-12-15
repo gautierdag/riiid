@@ -312,10 +312,12 @@ def get_dataloaders(
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
-        batch_size=batch_size,
+        batch_size=512,
         collate_fn=collate_fn,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )
+
+    del df
 
     return train_loader, val_loader

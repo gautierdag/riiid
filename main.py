@@ -33,18 +33,27 @@ def train(cfg) -> None:
     num_workers = cfg["num_workers"]
     use_lectures = cfg["use_lectures"]
     use_prior_q_times = cfg["use_prior_q_times"]
-    use_prior_q_explanation = cfg["use_prior_q_explanation"]
+    arch_type = cfg["arch_type"]
+
+    amp_level = "O1"  # "O2"
+    min_multiple = 128
+    if arch_type == "reformer":
+        min_multiple = 128  # bucket size X 2
+        amp_level = "O1"
 
     train_loader, val_loader = get_dataloaders(
         batch_size=batch_size,
         max_window_size=max_window_size,
         use_lectures=use_lectures,
         num_workers=num_workers,
+        min_multiple=min_multiple,
     )
+    # 4347MiB
 
     # Init our model
     model = RIIDDTransformerModel(
         learning_rate=learning_rate,
+        arch_type=arch_type,
         emb_dim=emb_dim,  # embedding dimension - this is for everything
         dropout=dropout,
         n_heads=n_heads,
@@ -53,15 +62,15 @@ def train(cfg) -> None:
         dim_feedforward=dim_feedforward,
         max_window_size=max_window_size,
         use_prior_q_times=use_prior_q_times,
-        use_prior_q_explanation=use_prior_q_explanation,
     )
 
-    # experiment_name = f"e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"+ f"_el{n_decoder_layers}_dl{n_decoder_layers}"+ f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"+ f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_qexplain_{use_prior_q_explanation}"
-    experiment_name = "bling_bling"
-    logger = TensorBoardLogger(
-        f"{get_wd()}lightning_logs",
-        name=experiment_name,
+    experiment_name = (
+        f"{arch_type}_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
+        + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
+        + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
+        + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}"
     )
+    logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
     # Initialize a trainer
     trainer = pl.Trainer(
@@ -80,15 +89,12 @@ def train(cfg) -> None:
         logger=logger,
         val_check_interval=2500,  # check validation every validation_step
         limit_val_batches=0.10,  # run through only 10% of val every time
-        # log_gpu_memory="all",
-        # accumulate_grad_batches=4,
+        amp_level=amp_level,
     )
 
     # Train the model ⚡
     trainer.fit(
-        model,
-        train_dataloader=train_loader,
-        val_dataloaders=[val_loader],
+        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set

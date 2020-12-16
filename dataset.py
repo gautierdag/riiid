@@ -15,6 +15,19 @@ from preprocessing import (
 from utils import get_wd
 
 
+import math
+import torch.nn.functional as F
+
+
+def pad_to_multiple(tensor, multiple=128, pad_value=0):
+    m = tensor.shape[0] / multiple
+    if m.is_integer():
+        return tensor
+    remainder = math.ceil(m) * multiple - tensor.shape[0]
+    pad_offset = (0,) * 2 * (len(tensor.shape) - 1)
+    return F.pad(tensor, (*pad_offset, 0, remainder), value=pad_value)
+
+
 class RIIDDataset(Dataset):
     """RIID dataset."""
 
@@ -63,16 +76,7 @@ class RIIDDataset(Dataset):
             "prior_question_elapsed_time": np.array(
                 self.f[f"{user_id}/prior_question_elapsed_time"], dtype=np.float32
             ),
-            "prior_question_had_explanation": np.array(
-                self.f[f"{user_id}/prior_question_had_explanation"], dtype=np.int64
-            ),
         }
-
-    def preload_all(self):
-        if not hasattr(self, "f"):
-            self.open_hdf5()
-        for u in tqdm(np.unique(dataset.user_mapping)):
-            self.load_user_into_cache(u)
 
     def __getitem__(self, idx):
 
@@ -101,7 +105,6 @@ class RIIDDataset(Dataset):
             answered_correctly = np.zeros(window_size, dtype=np.int64).copy()
             timestamps = np.zeros(window_size, dtype=np.float32).copy()
             prior_q_times = np.zeros(window_size, dtype=np.float32).copy()
-            prior_q_explanation = np.zeros(window_size, dtype=np.float32).copy()
 
             self.f[f"{user_id}/content_ids"].read_direct(
                 content_ids,
@@ -123,11 +126,6 @@ class RIIDDataset(Dataset):
                 source_sel=np.s_[start_index : start_index + window_size],
                 dest_sel=np.s_[0:window_size],
             )
-            self.f[f"{user_id}/prior_question_had_explanation"].read_direct(
-                prior_q_explanation,
-                source_sel=np.s_[start_index : start_index + window_size],
-                dest_sel=np.s_[0:window_size],
-            )
         else:
             if user_id not in self.cache:
                 self.load_user_into_cache(user_id)
@@ -142,9 +140,6 @@ class RIIDDataset(Dataset):
                 start_index : start_index + window_size
             ].copy()
             prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
-                start_index : start_index + window_size
-            ].copy()
-            prior_q_explanation = self.cache[user_id]["prior_question_had_explanation"][
                 start_index : start_index + window_size
             ].copy()
 
@@ -166,9 +161,7 @@ class RIIDDataset(Dataset):
         # else replace first element of sequence with actual previous element
         else:
             self.f[f"{user_id}/answered_correctly"].read_direct(
-                answers,
-                source_sel=np.s_[start_index - 1],
-                dest_sel=np.s_[0],
+                answers, source_sel=np.s_[start_index - 1], dest_sel=np.s_[0],
             )
 
         return {
@@ -179,54 +172,62 @@ class RIIDDataset(Dataset):
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
-            "prior_q_explanation": torch.from_numpy(prior_q_explanation).long(),
             "length": window_size,
         }
 
 
-def collate_fn(batch):
-    """
-    The collate function is used to merge individual data samples into a batch
-    It handles the padding aspect
-    """
+def get_collate_fn(min_multiple=None):
+    def collate_fn(batch):
+        """
+        The collate function is used to merge individual data samples into a batch
+        It handles the padding aspect
+        """
 
-    # collate lenghts into 1D tensor
-    items = {"length": torch.tensor([batch_item["length"] for batch_item in batch])}
+        # collate lenghts into 1D tensor
+        items = {"length": torch.tensor([batch_item["length"] for batch_item in batch])}
 
-    # find shape that the batch will have
-    max_length = items["length"].max()
-    num_items = len(batch)
+        # find shape that the batch will have
+        max_length = items["length"].max()
+        num_items = len(batch)
 
-    # padding list
-    for (key, padding) in [
-        ("parts", 0),
-        ("content_ids", 13942),
-        ("answered_correctly", 3),
-        ("answers", 3),
-        ("timestamps", 0.0),  # note timestamps isnt an embedding
-        ("tags", 188),
-        ("prior_q_times", 0),
-        ("prior_q_explanation", 0),
-    ]:
-        items[key] = pad_sequence(
-            [batch_item[key] for batch_item in batch],
-            batch_first=False,
-            padding_value=padding,
+        # padding list
+        for (key, padding) in [
+            ("parts", 0),
+            ("content_ids", 13942),
+            ("answered_correctly", 3),
+            ("answers", 3),
+            ("timestamps", 0.0),  # note timestamps isnt an embedding
+            ("tags", 188),
+            ("prior_q_times", 0),
+        ]:
+            items[key] = pad_sequence(
+                [batch_item[key] for batch_item in batch],
+                batch_first=False,
+                padding_value=padding,
+            )
+
+            if min_multiple is not None:
+                # apply reformer padding
+                items[key] = pad_to_multiple(
+                    items[key], multiple=min_multiple, pad_value=padding
+                )
+
+        new_max_length = items["answered_correctly"].shape[0]
+        # mask to weight loss by (S, N)
+        items["loss_mask"] = (
+            (
+                torch.arange(new_max_length).expand(num_items, new_max_length)
+                < items["length"].unsqueeze(1)
+            )
+            .transpose(1, 0)
+            .float()
         )
+        items["loss_mask"] *= items["answered_correctly"] != 4  # mask the lectures
+        items["answered_correctly"] = items["answered_correctly"].float()
 
-    # mask to weight loss by (S, N)
-    items["loss_mask"] = (
-        (
-            torch.arange(max_length).expand(num_items, max_length)
-            < items["length"].unsqueeze(1)
-        )
-        .transpose(1, 0)
-        .float()
-    )
-    items["loss_mask"] *= items["answered_correctly"] != 4  # mask the lectures
-    items["answered_correctly"] = items["answered_correctly"].float()
+        return items
 
-    return items
+    return collate_fn
 
 
 def get_train_val_idxs(
@@ -268,7 +269,11 @@ def get_train_val_idxs(
 
 
 def get_dataloaders(
-    batch_size=1024, max_window_size=100, use_lectures=True, num_workers=0
+    batch_size=1024,
+    max_window_size=100,
+    use_lectures=True,
+    num_workers=0,
+    min_multiple=None,
 ):
 
     print("Reading pickle")
@@ -306,14 +311,14 @@ def get_dataloaders(
         dataset=Subset(dataset, q_train_indices),
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=get_collate_fn(min_multiple=min_multiple),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),  # if GPU then pin memory for perf
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
         batch_size=512,
-        collate_fn=collate_fn,
+        collate_fn=get_collate_fn(min_multiple=min_multiple),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )

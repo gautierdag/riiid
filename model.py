@@ -3,7 +3,6 @@ import matplotlib.style as style
 
 style.use("fivethirtyeight")
 import seaborn as sns
-import gc
 
 import math
 import torch
@@ -12,6 +11,7 @@ from torch.nn import functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
+from reformer_pytorch import Reformer
 
 
 def init_weights(m):
@@ -21,7 +21,7 @@ def init_weights(m):
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=1000):
+    def __init__(self, d_model, max_len=2048):
         super(PositionalEncoding, self).__init__()
 
         pe = torch.zeros(max_len, d_model)
@@ -39,29 +39,89 @@ class PositionalEncoding(nn.Module):
         return self.pe[:sequence_length, :]
 
 
-def init_weights(m):
-    if type(m) == nn.Linear:
-        torch.nn.init.xavier_uniform_(m.weight)
-        torch.nn.init.zeros_(m.bias)
+class FormerModule(nn.Module):
+    def __init__(
+        self,
+        arch_type="base",
+        emb_dim=64,
+        n_heads=4,
+        n_encoder_layers=4,
+        n_decoder_layers=4,
+        max_len=1000,
+        dropout=0.0,
+        dim_feedforward=256,
+        activation="relu",
+    ):
+        super(FormerModule, self).__init__()
+        self.arch_type = arch_type
+        self.pos_encoder = PositionalEncoding(emb_dim)
+        if arch_type == "base":
+            self.model_type = "Transformer"
+            self.transformer = nn.Transformer(
+                d_model=emb_dim,
+                nhead=n_heads,
+                num_encoder_layers=n_encoder_layers,
+                num_decoder_layers=n_decoder_layers,
+                dropout=dropout,
+                dim_feedforward=dim_feedforward,
+                activation=activation,
+            )
+        if arch_type == "reformer":
+            self.model_type = "Reformer"
+            self.encoder = Reformer(
+                dim=emb_dim,
+                depth=n_encoder_layers,
+                heads=n_heads,
+                lsh_dropout=dropout,
+                max_seq_len=max_len,
+                causal=True,
+            )
+            self.decoder = Reformer(
+                dim=emb_dim,
+                depth=n_decoder_layers,
+                heads=n_heads,
+                lsh_dropout=dropout,
+                max_seq_len=max_len,
+                causal=True,
+            )
 
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=1000):
-        super(PositionalEncoding, self).__init__()
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = (
+            mask.float()
+            .masked_fill(mask == 0, float("-inf"))
+            .masked_fill(mask == 1, float(0.0))
         )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer("pe", pe)
+        return mask
 
-    def forward(self, sequence_length):
-        # returns embeds (sequence_length, 1, d_model)
-        return self.pe[:sequence_length, :]
+    def forward(self, embeded_exercises, embeded_responses):
+        # adding positional vector
+        sequence_length = embeded_responses.shape[0]
+        batch_size = embeded_responses.shape[1]
+
+        embedded_positions = self.pos_encoder(sequence_length + 1)
+        # add shifted position embedding ( start token is first position)
+        embeded_responses = embeded_responses + embedded_positions[:-1, :, :]
+        embeded_exercises = embeded_exercises + embedded_positions[1:, :, :]
+
+        if self.arch_type == "base":
+            # mask of shape S x S -> prevents attention looking forward
+            top_right_attention_mask = self.generate_square_subsequent_mask(
+                sequence_length
+            ).type_as(embeded_exercises)
+            return self.transformer(
+                embeded_exercises,
+                embeded_responses,
+                tgt_mask=top_right_attention_mask,  # (S,S)
+                src_mask=top_right_attention_mask,  # (T,T)
+            )
+        if self.arch_type == "reformer":
+            enc_keys = self.encoder(
+                embeded_exercises.view(batch_size, sequence_length, -1)
+            )
+            return self.decoder(
+                embeded_responses.view(batch_size, sequence_length, -1), keys=enc_keys
+            ).view(sequence_length, batch_size, -1)
 
 
 class RIIDDTransformerModel(pl.LightningModule):
@@ -82,6 +142,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         max_window_size=100,
         use_prior_q_times=False,
         use_prior_q_explanation=False,
+        arch_type="base",
     ):
         super(RIIDDTransformerModel, self).__init__()
         self.model_type = "RiiidTransformer"
@@ -117,18 +178,15 @@ class RIIDDTransformerModel(pl.LightningModule):
         w = [0.5, 0.5]
         if use_prior_q_times:
             w.append(0.5)
-        if use_prior_q_explanation:
-            w.append(0.5)
-
         self.response_weights = torch.nn.Parameter(torch.tensor([w]))
 
-        self.pos_encoder = PositionalEncoding(emb_dim)
-
-        self.transformer = nn.Transformer(
-            d_model=emb_dim,
-            nhead=n_heads,
-            num_encoder_layers=n_encoder_layers,
-            num_decoder_layers=n_decoder_layers,
+        self.transformer = FormerModule(
+            arch_type=arch_type,
+            emb_dim=emb_dim,
+            n_heads=n_heads,
+            n_encoder_layers=n_encoder_layers,
+            n_decoder_layers=n_decoder_layers,
+            max_len=max_window_size,
             dropout=dropout,
             dim_feedforward=dim_feedforward,
             activation=activation,
@@ -136,15 +194,6 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         self.out_linear = nn.Linear(emb_dim, 2)
         init_weights(self)
-
-    def generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = (
-            mask.float()
-            .masked_fill(mask == 0, float("-inf"))
-            .masked_fill(mask == 1, float(0.0))
-        )
-        return mask
 
     def get_random_steps(self, lengths, max_steps=10):
         """
@@ -155,37 +204,14 @@ class RIIDDTransformerModel(pl.LightningModule):
             0,
             (
                 torch.minimum(
-                    torch.ones(lengths.shape, device=self.device) * 10, lengths
+                    torch.ones(lengths.shape, device=self.device) * max_steps, lengths
                 )
             ).float(),
         )
         return torch.floor(m.sample()).long() + 1
 
-    def get_random_lengths(self, lengths):
-        # gets random new lengths
-        m = torch.distributions.uniform.Uniform(0, lengths.float())
-        return torch.floor(m.sample()).long() + 1
-
-    def randomize_evaluation_step(self, batch, max_steps=10):
-        # randomize new lengths (for where start token is present)
-        # batch["length"] = torch.where(
-        #     batch["answers"][0, :] == 2,
-        #     self.get_random_lengths(batch["length"]),
-        #     batch["length"],
-        # )
-        # randomize number of steps based on new random lengths
-        batch["steps"] = self.get_random_steps(batch["length"], max_steps=max_steps)
-        return batch
-
     def forward(
-        self,
-        content_ids,
-        parts,
-        answers,
-        tags,
-        timestamps,
-        prior_q_times,
-        prior_q_explanation,
+        self, content_ids, parts, answers, tags, timestamps, prior_q_times,
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
@@ -198,9 +224,6 @@ class RIIDDTransformerModel(pl.LightningModule):
             tags = tags.unsqueeze(1)
             timestamps = timestamps.unsqueeze(1)
             prior_q_times = prior_q_times.unsqueeze(1)
-            prior_q_explanation = prior_q_explanation.unsqueeze(1)
-
-        sequence_length = content_ids.shape[0]
 
         # sequence that will go into encoder
         embeded_content = self.embed_content_id(content_ids)
@@ -208,7 +231,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         embeded_tags = self.embed_tags(tags).sum(dim=2)
         e_w = F.softmax(self.exercise_weights, dim=0)
 
-        embeded_exercise_sequence = (
+        embeded_exercises = (
             torch.stack([embeded_content, embeded_parts, embeded_tags], dim=3) * e_w
         ).sum(dim=3)
 
@@ -223,38 +246,12 @@ class RIIDDTransformerModel(pl.LightningModule):
             # zero embedding - if start token
             embeded_q_times[0, torch.where(answers[0, :] == 2)[0], :] = 0
             exercise_sequence_components.append(embeded_q_times)
-        if self.use_prior_q_explanation:
-            embeded_q_explanation = self.embed_prior_q_explanation(prior_q_explanation)
-            # zero embedding - if start token
-            embeded_q_explanation[0, torch.where(answers[0, :] == 2)[0], :] = 0
-            exercise_sequence_components.append(embeded_q_explanation)
 
         embeded_responses = (
             torch.stack(exercise_sequence_components, dim=3) * r_w
         ).sum(dim=3)
 
-        # adding positional vector
-        embedded_positions = self.pos_encoder(sequence_length + 1)
-
-        # add shifted position embedding ( start token is first position)
-        embeded_responses = embeded_responses + embedded_positions[:-1, :, :]
-
-        embeded_exercise_sequence = (
-            embeded_exercise_sequence + embedded_positions[1:, :, :]
-        )
-
-        # mask of shape S x S -> prevents attention looking forward
-        top_right_attention_mask = self.generate_square_subsequent_mask(
-            sequence_length
-        ).type_as(embeded_exercise_sequence)
-
-        output = self.transformer(
-            embeded_exercise_sequence,
-            embeded_responses,
-            tgt_mask=top_right_attention_mask,  # (S,S)
-            src_mask=top_right_attention_mask,  # (T,T)
-        )
-
+        output = self.transformer(embeded_exercises, embeded_responses)
         output = self.out_linear(output)
         return F.softmax(output, dim=2)[:, :, 1]
 
@@ -267,7 +264,6 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["tags"],
             batch["timestamps"],
             batch["prior_q_times"],
-            batch["prior_q_explanation"],
         )
 
     @auto_move_data
@@ -320,15 +316,7 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     @auto_move_data
     def predict_fast_single_user(
-        self,
-        content_ids,
-        parts,
-        answers,
-        tags,
-        timestamps,
-        prior_q_times,
-        prior_q_explanation,
-        n=1,
+        self, content_ids, parts, answers, tags, timestamps, prior_q_times, n=1,
     ):
         """
         Predicts n steps for a single user in batch and return predictions
@@ -337,15 +325,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         length = len(content_ids)
         out_predictions = torch.zeros(n, device=self.device)
         for i in range(n, 0, -1):
-            preds = self(
-                content_ids,
-                parts,
-                answers,
-                tags,
-                timestamps,
-                prior_q_times,
-                prior_q_explanation,
-            )
+            preds = self(content_ids, parts, answers, tags, timestamps, prior_q_times,)
             out_predictions[n - i] = preds[length - i, 0]
 
             # answers are shifted (start token) so need + 1
@@ -366,7 +346,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.log("train_loss", loss.cpu())
         return loss
 
-    def validate_n_steps(self, batch, max_steps=10):
+    def validate_n_steps(self, batch):
         """
         Predicts max_steps steps for all items in batch and return predictions
         only for those steps (flattened)
@@ -405,8 +385,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         return (preds, sequence_indexes, user_indexes)
 
     def val_test_step(self, batch, log_as="val"):
-        batch = self.randomize_evaluation_step(batch)
-
+        batch["steps"] = self.get_random_steps(batch["length"], max_steps=10)
         result, sequence_indexes, user_indexes = self.validate_n_steps(batch)
 
         step_mask = torch.zeros(batch["loss_mask"].shape, device=self.device)

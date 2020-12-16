@@ -11,10 +11,3 @@ num_workers: 6
 use_lectures: True
 use_prior_q_times: False
 arch_type: base
-
-# hydra:
-  # output_subdir: null
-#   launcher:
-#     n_jobs: 2
-# defaults:
-#   - hydra/launcher: joblib

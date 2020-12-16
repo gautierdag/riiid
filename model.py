@@ -11,7 +11,7 @@ from torch.nn import functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
-from reformer_pytorch import Reformer
+from linformer_pytorch import Linformer
 
 
 def init_weights(m):
@@ -66,22 +66,23 @@ class FormerModule(nn.Module):
                 dim_feedforward=dim_feedforward,
                 activation=activation,
             )
-        if arch_type == "reformer":
-            self.model_type = "Reformer"
-            self.encoder = Reformer(
-                dim=emb_dim,
+        if arch_type == "linformer":
+            self.model_type = "Linformer"
+            self.encoder = Linformer(
+                input_size=max_len,
+                channels=emb_dim,
+                dim_k=64,
+                nhead=n_heads,
                 depth=n_encoder_layers,
-                heads=n_heads,
-                lsh_dropout=dropout,
-                max_seq_len=max_len,
                 causal=True,
             )
-            self.decoder = Reformer(
-                dim=emb_dim,
+            self.decoder = Linformer(
+                input_size=max_len,
+                channels=emb_dim,
+                dim_k=64,
+                nhead=n_heads,
                 depth=n_decoder_layers,
-                heads=n_heads,
-                lsh_dropout=dropout,
-                max_seq_len=max_len,
+                decoder_mode=True,
                 causal=True,
             )
 
@@ -115,12 +116,13 @@ class FormerModule(nn.Module):
                 tgt_mask=top_right_attention_mask,  # (S,S)
                 src_mask=top_right_attention_mask,  # (T,T)
             )
-        if self.arch_type == "reformer":
+        if self.arch_type == "linformer":
             enc_keys = self.encoder(
                 embeded_exercises.view(batch_size, sequence_length, -1)
             )
             return self.decoder(
-                embeded_responses.view(batch_size, sequence_length, -1), keys=enc_keys
+                embeded_responses.view(batch_size, sequence_length, -1),
+                embeddings=enc_keys,
             ).view(sequence_length, batch_size, -1)
 
 
@@ -211,7 +213,13 @@ class RIIDDTransformerModel(pl.LightningModule):
         return torch.floor(m.sample()).long() + 1
 
     def forward(
-        self, content_ids, parts, answers, tags, timestamps, prior_q_times,
+        self,
+        content_ids,
+        parts,
+        answers,
+        tags,
+        timestamps,
+        prior_q_times,
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
@@ -316,7 +324,14 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     @auto_move_data
     def predict_fast_single_user(
-        self, content_ids, parts, answers, tags, timestamps, prior_q_times, n=1,
+        self,
+        content_ids,
+        parts,
+        answers,
+        tags,
+        timestamps,
+        prior_q_times,
+        n=1,
     ):
         """
         Predicts n steps for a single user in batch and return predictions
@@ -325,7 +340,14 @@ class RIIDDTransformerModel(pl.LightningModule):
         length = len(content_ids)
         out_predictions = torch.zeros(n, device=self.device)
         for i in range(n, 0, -1):
-            preds = self(content_ids, parts, answers, tags, timestamps, prior_q_times,)
+            preds = self(
+                content_ids,
+                parts,
+                answers,
+                tags,
+                timestamps,
+                prior_q_times,
+            )
             out_predictions[n - i] = preds[length - i, 0]
 
             # answers are shifted (start token) so need + 1

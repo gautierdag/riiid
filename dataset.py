@@ -161,7 +161,9 @@ class RIIDDataset(Dataset):
         # else replace first element of sequence with actual previous element
         else:
             self.f[f"{user_id}/answered_correctly"].read_direct(
-                answers, source_sel=np.s_[start_index - 1], dest_sel=np.s_[0],
+                answers,
+                source_sel=np.s_[start_index - 1],
+                dest_sel=np.s_[0],
             )
 
         return {
@@ -207,7 +209,7 @@ def get_collate_fn(min_multiple=None):
             )
 
             if min_multiple is not None:
-                # apply reformer padding
+                # apply special padding
                 items[key] = pad_to_multiple(
                     items[key], multiple=min_multiple, pad_value=padding
                 )

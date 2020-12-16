@@ -35,11 +35,9 @@ def train(cfg) -> None:
     use_prior_q_times = cfg["use_prior_q_times"]
     arch_type = cfg["arch_type"]
 
-    amp_level = "O1"  # "O2"
-    min_multiple = 128
-    if arch_type == "reformer":
-        min_multiple = 128  # bucket size X 2
-        amp_level = "O1"
+    min_multiple = None
+    if arch_type == "linformer":
+        min_multiple = max_window_size
 
     train_loader, val_loader = get_dataloaders(
         batch_size=batch_size,
@@ -89,12 +87,13 @@ def train(cfg) -> None:
         logger=logger,
         val_check_interval=2500,  # check validation every validation_step
         limit_val_batches=0.10,  # run through only 10% of val every time
-        amp_level=amp_level,
     )
 
     # Train the model ⚡
     trainer.fit(
-        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
+        model,
+        train_dataloader=train_loader,
+        val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set

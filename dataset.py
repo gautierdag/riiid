@@ -11,8 +11,9 @@ from preprocessing import (
     questions_lectures_tags,
     questions_lectures_parts,
     generate_h5,
+    DATA_FOLDER_PATH
 )
-from utils import get_wd, DATA_FOLDER_PATH
+from utils import get_wd
 
 
 import math

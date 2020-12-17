@@ -11,7 +11,7 @@ from preprocessing import (
     questions_lectures_tags,
     questions_lectures_parts,
     generate_h5,
-    DATA_FOLDER_PATH
+    DATA_FOLDER_PATH,
 )
 from utils import get_wd
 
@@ -241,8 +241,12 @@ def get_train_val_idxs(
     use_lectures=True,
 ):
     try:
-        train_idxs = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}.npy")
-        val_idxs = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}.npy")
+        train_idxs = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy"
+        )
+        val_idxs = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy"
+        )
 
     except FileNotFoundError:
         train_idxs = []
@@ -275,11 +279,11 @@ def get_train_val_idxs(
                 train_idxs += list(indices)
 
         np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}.npy",
+            f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy",
             train_idxs,
         )
         np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}.npy",
+            f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy",
             val_idxs,
         )
     return train_idxs, val_idxs
@@ -287,6 +291,7 @@ def get_train_val_idxs(
 
 def get_dataloaders(
     batch_size=1024,
+    validation_batch_size=1024,
     max_window_size=100,
     use_lectures=True,
     num_workers=0,
@@ -334,7 +339,7 @@ def get_dataloaders(
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
-        batch_size=1024,
+        batch_size=validation_batch_size,
         collate_fn=get_collate_fn(min_multiple=min_multiple),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),

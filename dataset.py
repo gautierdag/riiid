@@ -12,7 +12,7 @@ from preprocessing import (
     questions_lectures_parts,
     generate_h5,
 )
-from utils import get_wd
+from utils import get_wd, DATA_FOLDER_PATH
 
 
 import math
@@ -234,39 +234,53 @@ def get_collate_fn(min_multiple=None):
 
 def get_train_val_idxs(
     df,
-    train_size=80000000,
+    train_size=90000000,
     validation_size=2500000,
     new_user_prob=0.25,
     use_lectures=True,
 ):
-    train_idxs = []
-    val_idxs = []
+    try:
+        train_idxs = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}.npy")
+        val_idxs = np.load(f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}.npy")
 
-    # create df with user_ids and indices
-    tmp_df = df[~df.content_type_id][["user_id"]].copy()
-    if not use_lectures:
-        tmp_df.reset_index(drop=True, inplace=True)
+    except FileNotFoundError:
+        train_idxs = []
+        val_idxs = []
 
-    tmp_df["index"] = tmp_df.index.values.astype(np.uint32)
-    user_id_index = tmp_df.groupby("user_id")["index"].apply(np.array)
+        # create df with user_ids and indices
+        tmp_df = df[~df.content_type_id][["user_id"]].copy()
+        if not use_lectures:
+            tmp_df.reset_index(drop=True, inplace=True)
 
-    # iterate over users in random order
-    for indices in user_id_index.sample(user_id_index.size, random_state=69):
-        if len(train_idxs) > train_size:
-            break
-        # fill validation data
-        if len(val_idxs) < validation_size:
-            # add new user
-            if np.random.rand() < new_user_prob:
-                val_idxs += list(indices)
+        tmp_df["index"] = tmp_df.index.values.astype(np.uint32)
+        user_id_index = tmp_df.groupby("user_id")["index"].apply(np.array)
 
-            # randomly split user between train and val otherwise
+        # iterate over users in random order
+        for indices in user_id_index.sample(user_id_index.size, random_state=69):
+            if len(train_idxs) > train_size:
+                break
+            # fill validation data
+            if len(val_idxs) < validation_size:
+                # add new user
+                if np.random.rand() < new_user_prob:
+                    val_idxs += list(indices)
+
+                # randomly split user between train and val otherwise
+                else:
+                    offset = np.random.randint(0, indices.size)
+                    train_idxs += list(indices[:offset])
+                    val_idxs += list(indices[offset:])
             else:
-                offset = np.random.randint(0, indices.size)
-                train_idxs += list(indices[:offset])
-                val_idxs += list(indices[offset:])
-        else:
-            train_idxs += list(indices)
+                train_idxs += list(indices)
+
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}.npy",
+            train_idxs,
+        )
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}.npy",
+            val_idxs,
+        )
     return train_idxs, val_idxs
 
 
@@ -319,7 +333,7 @@ def get_dataloaders(
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
-        batch_size=512,
+        batch_size=1024,
         collate_fn=get_collate_fn(min_multiple=min_multiple),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),

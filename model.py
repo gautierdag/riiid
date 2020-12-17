@@ -71,7 +71,8 @@ class FormerModule(nn.Module):
             self.encoder = Linformer(
                 input_size=max_len,
                 channels=emb_dim,
-                dim_k=64,
+                dim_k=16,
+                dim_ff=32,
                 nhead=n_heads,
                 depth=n_encoder_layers,
                 causal=True,
@@ -79,7 +80,8 @@ class FormerModule(nn.Module):
             self.decoder = Linformer(
                 input_size=max_len,
                 channels=emb_dim,
-                dim_k=64,
+                dim_k=16,
+                dim_ff=32,
                 nhead=n_heads,
                 depth=n_decoder_layers,
                 decoder_mode=True,

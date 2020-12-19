@@ -29,29 +29,27 @@ def train(cfg) -> None:
     n_decoder_layers = cfg["n_decoder_layers"]
     dim_feedforward = cfg["dim_feedforward"]
     batch_size = cfg["batch_size"]
+    validation_batch_size = cfg["validation_batch_size"]
     max_window_size = cfg["max_window_size"]
     num_workers = cfg["num_workers"]
     use_lectures = cfg["use_lectures"]
     use_prior_q_times = cfg["use_prior_q_times"]
-    arch_type = cfg["arch_type"]
-
-    min_multiple = None
-    if arch_type == "linformer":
-        min_multiple = max_window_size
+    val_step_frequency = cfg["val_step_frequency"]
+    val_size = cfg["val_size"]
+    accumulate_grad_batches = cfg["accumulate_grad_batches"]
 
     train_loader, val_loader = get_dataloaders(
         batch_size=batch_size,
+        validation_batch_size=validation_batch_size,
         max_window_size=max_window_size,
         use_lectures=use_lectures,
         num_workers=num_workers,
-        min_multiple=min_multiple,
     )
     # 4347MiB
 
     # Init our model
     model = RIIDDTransformerModel(
         learning_rate=learning_rate,
-        arch_type=arch_type,
         emb_dim=emb_dim,  # embedding dimension - this is for everything
         dropout=dropout,
         n_heads=n_heads,
@@ -60,10 +58,11 @@ def train(cfg) -> None:
         dim_feedforward=dim_feedforward,
         max_window_size=max_window_size,
         use_prior_q_times=use_prior_q_times,
+        lr_step_frequency=val_step_frequency,
     )
 
     experiment_name = (
-        f"{arch_type}_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
+        f"base_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
         + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
         + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
         + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}"
@@ -74,7 +73,7 @@ def train(cfg) -> None:
     trainer = pl.Trainer(
         gpus=1,
         max_epochs=5,
-        progress_bar_refresh_rate=1,
+        progress_bar_refresh_rate=accumulate_grad_batches,
         callbacks=[
             EarlyStopping(monitor="avg_val_auc", patience=10, mode="max"),
             ModelCheckpoint(
@@ -85,8 +84,9 @@ def train(cfg) -> None:
             LearningRateMonitor(logging_interval="step"),
         ],
         logger=logger,
-        val_check_interval=2500,  # check validation every validation_step
-        limit_val_batches=0.10,  # run through only 10% of val every time
+        val_check_interval=val_step_frequency,  # check validation every validation_step
+        limit_val_batches=val_size,  # run through only 10% of val every time
+        accumulate_grad_batches=accumulate_grad_batches,
     )
 
     # Train the model ⚡

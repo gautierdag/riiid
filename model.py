@@ -76,7 +76,10 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.embed_tags = nn.Embedding(n_tags, emb_dim, padding_idx=188)
 
         # exercise weights to weight the mean embeded excercise embeddings
-        self.exercise_weights = torch.nn.Parameter(torch.tensor([0.35, 0.55, 0.1]))
+        self.exercise_weights = nn.Parameter(
+            torch.tensor([0.35, 0.55, 0.1]), requires_grad=True
+        )
+        self.register_parameter("exercise_weights", self.exercise_weights)
 
         ### RESPONSE SEQUENCE (1st time stamp of sequence is useless)
         self.embed_answered_correctly = nn.Embedding(
@@ -93,7 +96,8 @@ class RIIDDTransformerModel(pl.LightningModule):
         w = [0.5, 0.5]
         if use_prior_q_times:
             w.append(0.5)
-        self.response_weights = torch.nn.Parameter(torch.tensor([w]))
+        self.response_weights = nn.Parameter(torch.tensor([w]), requires_grad=True)
+        self.register_parameter("response_weights", self.response_weights)  ###
 
         # Transformer component
         self.pos_encoder = PositionalEncoding(emb_dim)

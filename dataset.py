@@ -10,6 +10,7 @@ from preprocessing import (
     get_time_elapsed_from_timestamp,
     questions_lectures_tags,
     questions_lectures_parts,
+    questions_lectures_mean,
     generate_h5,
     DATA_FOLDER_PATH,
 )
@@ -29,6 +30,61 @@ def pad_to_multiple(tensor, multiple=128, pad_value=0):
     return F.pad(tensor, (*pad_offset, 0, remainder), value=pad_value)
 
 
+def get_parts_agg_feats(q_idx, parts, answered_correctly):
+    parts_aggs = np.zeros((len(parts), 7))
+
+    # select parts for only questions
+    p = parts[q_idx]
+
+    # get running counts of parts answered
+    count_parts = np.zeros((p.size, 7))
+    count_parts[np.arange(p.size), p - 1] = 1
+    count_parts = count_parts.cumsum(axis=0)
+
+    # get running sum of answered correctly for each part
+    answered_correctly_parts = np.zeros((p.size, 7))
+    answered_correctly_parts[np.arange(p.size), p - 1] = answered_correctly[q_idx]
+    answered_correctly_parts = answered_correctly_parts.cumsum(axis=0)
+
+    parts_aggs[q_idx, :] = answered_correctly_parts / (count_parts + 1)
+
+    return parts_aggs
+
+
+def get_agg_feats(content_ids, answered_correctly, parts):
+
+    # Calculate agg feats
+    # question idx
+    q_idx = np.where(answered_correctly != 4)[0]
+
+    # user mean
+    m_user_mean = np.zeros(len(content_ids))
+    m_user_mean[q_idx] = answered_correctly[q_idx].cumsum() / (
+        np.arange(len(q_idx)) + 1
+    )
+    # prevent leak
+    m_user_mean = np.roll(m_user_mean, 1)
+    m_user_mean[0] = 0
+
+    # content mean
+    m_content_mean = np.zeros(len(content_ids))
+    m_content_mean[q_idx] = questions_lectures_mean[content_ids][q_idx].cumsum() / (
+        np.arange(len(q_idx)) + 1
+    )
+
+    # part mean
+    parts_mean = get_parts_agg_feats(q_idx, parts, answered_correctly)
+
+    # prevent leak
+    parts_mean = np.roll(parts_mean, 1, axis=0)
+    parts_mean[0] = 0
+
+    return np.concatenate(
+        [m_content_mean[..., np.newaxis], m_user_mean[..., np.newaxis], parts_mean],
+        axis=1,
+    )
+
+
 class RIIDDataset(Dataset):
     """RIID dataset."""
 
@@ -38,7 +94,7 @@ class RIIDDataset(Dataset):
         user_history,
         hdf5_file="feats.h5",
         window_size=100,
-        use_cache=False,
+        use_agg_feats=True,
     ):
         """
         Args:
@@ -46,14 +102,13 @@ class RIIDDataset(Dataset):
             user_history (np.array): array of length of history up till this row
             hdf5_file (string): location of hf5 feats file
             window_size (int): size of window to lookback to max
-            use_cache (opt, bool): whether to cache reads
         """
         # np array where index maps to a user id
         self.user_mapping = user_mapping
         self.user_history = user_history
         self.hdf5_file = f"{hdf5_file}"
         self.max_window_size = window_size
-        self.use_cache = use_cache
+        self.use_agg_feats = use_agg_feats
         self.cache = {}
 
     def open_hdf5(self):
@@ -101,57 +156,42 @@ class RIIDDataset(Dataset):
             # randomly select window size subset instead of trying to cram in everything
             start_index = length - window_size
 
-        if not self.use_cache:
-            content_ids = np.zeros(window_size, dtype=np.int64).copy()
-            answered_correctly = np.zeros(window_size, dtype=np.int64).copy()
-            timestamps = np.zeros(window_size, dtype=np.float32).copy()
-            prior_q_times = np.zeros(window_size, dtype=np.float32).copy()
+        if user_id not in self.cache:
+            self.load_user_into_cache(user_id)
 
-            self.f[f"{user_id}/content_ids"].read_direct(
-                content_ids,
-                source_sel=np.s_[start_index : start_index + window_size],
-                dest_sel=np.s_[0:window_size],
-            )
-            self.f[f"{user_id}/answered_correctly"].read_direct(
-                answered_correctly,
-                source_sel=np.s_[start_index : start_index + window_size],
-                dest_sel=np.s_[0:window_size],
-            )
-            self.f[f"{user_id}/timestamps"].read_direct(
-                timestamps,
-                source_sel=np.s_[start_index : start_index + window_size],
-                dest_sel=np.s_[0:window_size],
-            )
-            self.f[f"{user_id}/prior_question_elapsed_time"].read_direct(
-                prior_q_times,
-                source_sel=np.s_[start_index : start_index + window_size],
-                dest_sel=np.s_[0:window_size],
-            )
-        else:
-            if user_id not in self.cache:
-                self.load_user_into_cache(user_id)
+        content_ids = self.cache[user_id]["content_ids"][
+            : start_index + window_size
+        ].copy()
+        answered_correctly = self.cache[user_id]["answered_correctly"][
+            : start_index + window_size
+        ].copy()
 
-            content_ids = self.cache[user_id]["content_ids"][
-                start_index : start_index + window_size
-            ].copy()
-            answered_correctly = self.cache[user_id]["answered_correctly"][
-                start_index : start_index + window_size
-            ].copy()
-            timestamps = self.cache[user_id]["timestamps"][
-                start_index : start_index + window_size
-            ].copy()
-            prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
-                start_index : start_index + window_size
-            ].copy()
+        # get question parts
+        parts = questions_lectures_parts[content_ids]
+
+        agg_feats = None
+        if self.use_agg_feats:
+            agg_feats = get_agg_feats(content_ids, answered_correctly, parts)
+            agg_feats = agg_feats[start_index:]
+
+        # select to proper length
+        parts = parts[start_index:]
+        content_ids = content_ids[start_index:]
+        answered_correctly = answered_correctly[start_index:]
+
+        # load in time stuff
+        timestamps = self.cache[user_id]["timestamps"][
+            start_index : start_index + window_size
+        ].copy()
+        prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
+            start_index : start_index + window_size
+        ].copy()
 
         # convert timestamps to time elapsed
         time_elapsed_timestamps = get_time_elapsed_from_timestamp(timestamps)
 
         # get question tags
         tags = questions_lectures_tags[content_ids, :]
-
-        # get question parts
-        parts = questions_lectures_parts[content_ids]
 
         # shift by one the answered_correctly sequence
         answers = np.roll(answered_correctly, 1)
@@ -161,11 +201,7 @@ class RIIDDataset(Dataset):
             answers[0] = 2
         # else replace first element of sequence with actual previous element
         else:
-            self.f[f"{user_id}/answered_correctly"].read_direct(
-                answers,
-                source_sel=np.s_[start_index - 1],
-                dest_sel=np.s_[0],
-            )
+            answers[0] = self.cache[user_id]["answered_correctly"][start_index - 1]
 
         return {
             "parts": torch.from_numpy(parts).long(),
@@ -175,11 +211,14 @@ class RIIDDataset(Dataset):
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
+            "agg_feats": torch.from_numpy(agg_feats).float()
+            if agg_feats is not None
+            else agg_feats,
             "length": window_size,
         }
 
 
-def get_collate_fn(min_multiple=None):
+def get_collate_fn(min_multiple=None, use_agg_feats=True):
     def collate_fn(batch):
         """
         The collate function is used to merge individual data samples into a batch
@@ -190,11 +229,9 @@ def get_collate_fn(min_multiple=None):
         items = {"length": torch.tensor([batch_item["length"] for batch_item in batch])}
 
         # find shape that the batch will have
-        max_length = items["length"].max()
         num_items = len(batch)
 
-        # padding list
-        for (key, padding) in [
+        PADDING_LIST = [
             ("parts", 0),
             ("content_ids", 13942),
             ("answered_correctly", 3),
@@ -202,7 +239,13 @@ def get_collate_fn(min_multiple=None):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
-        ]:
+        ]
+
+        if use_agg_feats:
+            PADDING_LIST.append(("agg_feats", 0))
+
+        # padding list
+        for (key, padding) in PADDING_LIST:
             items[key] = pad_sequence(
                 [batch_item[key] for batch_item in batch],
                 batch_first=False,
@@ -296,6 +339,7 @@ def get_dataloaders(
     use_lectures=True,
     num_workers=0,
     min_multiple=None,
+    use_agg_feats=True,
 ):
 
     print("Reading pickle")
@@ -318,7 +362,7 @@ def get_dataloaders(
         user_history,
         hdf5_file=h5_file_name,
         window_size=max_window_size,
-        use_cache=True,
+        use_agg_feats=use_agg_feats,
     )
     print(f"len(dataset): {len(dataset)}")
 
@@ -333,14 +377,18 @@ def get_dataloaders(
         dataset=Subset(dataset, q_train_indices),
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=get_collate_fn(min_multiple=min_multiple),
+        collate_fn=get_collate_fn(
+            min_multiple=min_multiple, use_agg_feats=use_agg_feats
+        ),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),  # if GPU then pin memory for perf
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
         batch_size=validation_batch_size,
-        collate_fn=get_collate_fn(min_multiple=min_multiple),
+        collate_fn=get_collate_fn(
+            min_multiple=min_multiple, use_agg_feats=use_agg_feats
+        ),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )

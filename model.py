@@ -1,9 +1,3 @@
-import matplotlib.pyplot as plt
-import matplotlib.style as style
-
-style.use("fivethirtyeight")
-import seaborn as sns
-
 import math
 import torch
 from torch import nn as nn
@@ -46,6 +40,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_part=8,  # number of different parts = 7 + 1 (for padding)
         n_tags=189,  # number of different tags = 188 + 1 (for padding)
         n_correct=5,  # 0,1 (false, true), 2 (start token), 3 (padding), 4 (lecture)
+        n_agg_feats=9,  # number of agg feats
         emb_dim=64,  # embedding dimension
         dropout=0.1,
         n_heads: int = 1,
@@ -56,6 +51,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         max_window_size=100,
         use_prior_q_times=False,
         use_prior_q_explanation=False,
+        use_agg_feats=False,
         lr_step_frequency=2500,
     ):
         super(RIIDDTransformerModel, self).__init__()
@@ -66,6 +62,7 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         self.use_prior_q_times = use_prior_q_times
         self.use_prior_q_explanation = use_prior_q_explanation
+        self.use_agg_feats = use_agg_feats
 
         # save params of models to yml
         self.save_hyperparameters()
@@ -92,11 +89,16 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.embed_prior_q_time = nn.Linear(1, emb_dim)
         self.embed_prior_q_explanation = nn.Embedding(2, emb_dim)
 
+        self.embed_agg_feats = nn.Linear(n_agg_feats, emb_dim)
+
         # response weights to weight the mean embeded response embeddings
         w = [0.5, 0.5]
         if use_prior_q_times:
             w.append(0.5)
-        self.response_weights = nn.Parameter(torch.tensor([w]), requires_grad=True)
+        if use_agg_feats:
+            w.append(0.5)
+
+        self.response_weights = nn.Parameter(torch.tensor(w), requires_grad=True)
         self.register_parameter("response_weights", self.response_weights)  ###
 
         # Transformer component
@@ -139,13 +141,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         return torch.floor(m.sample()).long() + 1
 
     def forward(
-        self,
-        content_ids,
-        parts,
-        answers,
-        tags,
-        timestamps,
-        prior_q_times,
+        self, content_ids, parts, answers, tags, timestamps, prior_q_times, agg_feats
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
@@ -158,6 +154,8 @@ class RIIDDTransformerModel(pl.LightningModule):
             tags = tags.unsqueeze(1)
             timestamps = timestamps.unsqueeze(1)
             prior_q_times = prior_q_times.unsqueeze(1)
+            if self.use_agg_feats:
+                agg_feats = agg_feats.unsqueeze(1)
 
         # sequence that will go into encoder
         embeded_content = self.embed_content_id(content_ids)
@@ -180,6 +178,18 @@ class RIIDDTransformerModel(pl.LightningModule):
             # zero embedding - if start token
             embeded_q_times[0, torch.where(answers[0, :] == 2)[0], :] = 0
             exercise_sequence_components.append(embeded_q_times)
+
+        if self.use_agg_feats:
+            embeded_agg_feats = self.embed_agg_feats(agg_feats)
+            # progressively increase user experience
+            # embeded_agg_feats[:, torch.where(answers[0, :] == 2)[0], :] *= (
+            #             torch.arange(answers.shape[0], device=self.device, dtype=torch.float)[
+            #                 :, None, None
+            #             ]
+            #             / self.max_window_size
+            #         )
+            embeded_agg_feats[0, torch.where(answers[0, :] == 2)[0], :] = 0
+            exercise_sequence_components.append(embeded_agg_feats)
 
         embeded_responses = (
             torch.stack(exercise_sequence_components, dim=3) * r_w
@@ -216,6 +226,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["tags"],
             batch["timestamps"],
             batch["prior_q_times"],
+            batch["agg_feats"] if self.use_agg_feats else None,
         )
 
     @auto_move_data

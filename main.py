@@ -37,6 +37,7 @@ def train(cfg) -> None:
     val_step_frequency = cfg["val_step_frequency"]
     val_size = cfg["val_size"]
     accumulate_grad_batches = cfg["accumulate_grad_batches"]
+    use_agg_feats = cfg["use_agg_feats"]
 
     train_loader, val_loader = get_dataloaders(
         batch_size=batch_size,
@@ -44,6 +45,7 @@ def train(cfg) -> None:
         max_window_size=max_window_size,
         use_lectures=use_lectures,
         num_workers=num_workers,
+        use_agg_feats=use_agg_feats,
     )
     # 4347MiB
 
@@ -59,13 +61,14 @@ def train(cfg) -> None:
         max_window_size=max_window_size,
         use_prior_q_times=use_prior_q_times,
         lr_step_frequency=val_step_frequency,
+        use_agg_feats=use_agg_feats,
     )
 
     experiment_name = (
         f"base_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
         + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
         + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
-        + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}"
+        + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_use_agg_{use_agg_feats}"
     )
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 

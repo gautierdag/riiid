@@ -85,9 +85,39 @@ def get_lectures_mapping():
     return lectures_mapping
 
 
+def get_questions_lectures_mean():
+    """
+    Generates the mean accuracy obtained for each content id (0 for lectures)
+    """
+    try:
+        content_mean = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy"
+        )
+    except FileNotFoundError:
+        print("Generating questions lectures mean")
+        df = pd.read_pickle(f"{get_wd()}riiid_train.pkl.gzip")
+        content_mean = (
+            df[~df.content_type_id]
+            .groupby("content_id")
+            .answered_correctly.mean()
+            .reset_index()
+        )
+        content_mean = np.concatenate(
+            [content_mean.answered_correctly.values, np.zeros(418)]
+        )
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy",
+            content_mean,
+        )
+        del df
+
+    return content_mean
+
+
 lectures_mapping = get_lectures_mapping()
 questions_lectures_parts = get_questions_lectures_parts()
 questions_lectures_tags = get_questions_lectures_tags()
+questions_lectures_mean = get_questions_lectures_mean()
 
 
 def preprocess_df(df):

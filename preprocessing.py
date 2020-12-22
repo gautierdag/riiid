@@ -107,7 +107,8 @@ def get_questions_lectures_mean():
             [content_mean.answered_correctly.values, np.zeros(418)]
         )
         np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy", content_mean,
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy",
+            content_mean,
         )
         del df
 
@@ -116,7 +117,7 @@ def get_questions_lectures_mean():
 
 def get_questions_lectures_std_wass():
     """
-    Generates the std and wass distance between user_answers and actual answer on a question 
+    Generates the std and wass distance between user_answers and actual answer on a question
     """
     try:
         questions_lectures_wass = np.load(
@@ -187,7 +188,7 @@ def get_questions_lectures_std_wass():
 
         np.save(
             f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_wass.npy",
-            questions_lectures_std,
+            questions_lectures_wass,
         )
         np.save(
             f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_std.npy",

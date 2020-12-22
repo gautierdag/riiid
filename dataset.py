@@ -258,7 +258,7 @@ class RIIDDataset(Dataset):
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
             else agg_feats,
-            "e_feats": e_feats,
+            "e_feats": torch.from_numpy(e_feats).float(),
             "length": window_size,
         }
 

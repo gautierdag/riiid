@@ -184,7 +184,7 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         e_w = F.softmax(self.exercise_weights, dim=0)
         embeded_exercises = (
-            torch.stack([exercise_sequence_components], dim=3) * e_w
+            torch.stack(exercise_sequence_components, dim=3) * e_w
         ).sum(dim=3)
 
         # sequence that will go into decoder
@@ -247,6 +247,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["timestamps"],
             batch["prior_q_times"],
             batch["agg_feats"] if self.use_agg_feats else None,
+            batch["e_feats"] if self.use_exercise_feats else None,
         )
 
     @auto_move_data
@@ -299,7 +300,14 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     @auto_move_data
     def predict_fast_single_user(
-        self, content_ids, parts, answers, tags, timestamps, prior_q_times, n=1,
+        self,
+        content_ids,
+        parts,
+        answers,
+        tags,
+        timestamps,
+        prior_q_times,
+        n=1,
     ):
         """
         Predicts n steps for a single user in batch and return predictions
@@ -308,7 +316,14 @@ class RIIDDTransformerModel(pl.LightningModule):
         length = len(content_ids)
         out_predictions = torch.zeros(n, device=self.device)
         for i in range(n, 0, -1):
-            preds = self(content_ids, parts, answers, tags, timestamps, prior_q_times,)
+            preds = self(
+                content_ids,
+                parts,
+                answers,
+                tags,
+                timestamps,
+                prior_q_times,
+            )
             out_predictions[n - i] = preds[length - i, 0]
 
             # answers are shifted (start token) so need + 1

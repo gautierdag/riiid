@@ -16,3 +16,4 @@ val_step_frequency: 5000
 val_size: 0.10
 accumulate_grad_batches: 1
 use_agg_feats: True
+use_exercise_feats: True

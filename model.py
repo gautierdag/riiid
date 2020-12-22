@@ -40,7 +40,8 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_part=8,  # number of different parts = 7 + 1 (for padding)
         n_tags=189,  # number of different tags = 188 + 1 (for padding)
         n_correct=5,  # 0,1 (false, true), 2 (start token), 3 (padding), 4 (lecture)
-        n_agg_feats=9,  # number of agg feats
+        n_agg_feats=10,  # number of agg feats
+        n_exercise_feats=3,  # number of exercise feats
         emb_dim=64,  # embedding dimension
         dropout=0.1,
         n_heads: int = 1,
@@ -52,6 +53,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         use_prior_q_times=False,
         use_prior_q_explanation=False,
         use_agg_feats=False,
+        use_exercise_feats=False,
         lr_step_frequency=2500,
     ):
         super(RIIDDTransformerModel, self).__init__()
@@ -63,6 +65,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.use_prior_q_times = use_prior_q_times
         self.use_prior_q_explanation = use_prior_q_explanation
         self.use_agg_feats = use_agg_feats
+        self.use_exercise_feats = use_exercise_feats
 
         # save params of models to yml
         self.save_hyperparameters()
@@ -73,9 +76,12 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.embed_tags = nn.Embedding(n_tags, emb_dim, padding_idx=188)
 
         # exercise weights to weight the mean embeded excercise embeddings
-        self.exercise_weights = nn.Parameter(
-            torch.tensor([0.35, 0.55, 0.1]), requires_grad=True
-        )
+        e_w = [0.35, 0.55, 0.1]
+        if self.use_exercise_feats:
+            self.embed_exercise_features = nn.Linear(n_exercise_feats, emb_dim)
+            e_w.append(0.1)
+
+        self.exercise_weights = nn.Parameter(torch.tensor(e_w), requires_grad=True)
         self.register_parameter("exercise_weights", self.exercise_weights)
 
         ### RESPONSE SEQUENCE (1st time stamp of sequence is useless)
@@ -92,13 +98,13 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.embed_agg_feats = nn.Linear(n_agg_feats, emb_dim)
 
         # response weights to weight the mean embeded response embeddings
-        w = [0.5, 0.5]
+        r_w = [0.5, 0.5]
         if use_prior_q_times:
-            w.append(0.5)
+            r_w.append(0.5)
         if use_agg_feats:
-            w.append(0.5)
+            r_w.append(0.5)
 
-        self.response_weights = nn.Parameter(torch.tensor(w), requires_grad=True)
+        self.response_weights = nn.Parameter(torch.tensor(r_w), requires_grad=True)
         self.register_parameter("response_weights", self.response_weights)  ###
 
         # Transformer component
@@ -141,7 +147,15 @@ class RIIDDTransformerModel(pl.LightningModule):
         return torch.floor(m.sample()).long() + 1
 
     def forward(
-        self, content_ids, parts, answers, tags, timestamps, prior_q_times, agg_feats
+        self,
+        content_ids,
+        parts,
+        answers,
+        tags,
+        timestamps,
+        prior_q_times,
+        agg_feats,
+        e_feats,
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
@@ -156,28 +170,33 @@ class RIIDDTransformerModel(pl.LightningModule):
             prior_q_times = prior_q_times.unsqueeze(1)
             if self.use_agg_feats:
                 agg_feats = agg_feats.unsqueeze(1)
+            if self.use_exercise_feats:
+                e_feats = e_feats.unsqueeze(1)
 
         # sequence that will go into encoder
         embeded_content = self.embed_content_id(content_ids)
         embeded_parts = self.embed_parts(parts)
         embeded_tags = self.embed_tags(tags).sum(dim=2)
-        e_w = F.softmax(self.exercise_weights, dim=0)
+        exercise_sequence_components = [embeded_content, embeded_parts, embeded_tags]
+        if self.use_exercise_feats:
+            embeded_exercise_feats = self.embed_exercise_features(e_feats)
+            exercise_sequence_components.append(embeded_exercise_feats)
 
+        e_w = F.softmax(self.exercise_weights, dim=0)
         embeded_exercises = (
-            torch.stack([embeded_content, embeded_parts, embeded_tags], dim=3) * e_w
+            torch.stack([exercise_sequence_components], dim=3) * e_w
         ).sum(dim=3)
 
         # sequence that will go into decoder
         embeded_answered_correctly = self.embed_answered_correctly(answers)
         embeded_timestamps = self.embed_timestamps(timestamps.unsqueeze(2))
-        r_w = F.softmax(self.response_weights, dim=0)
 
-        exercise_sequence_components = [embeded_answered_correctly, embeded_timestamps]
+        response_sequence_components = [embeded_answered_correctly, embeded_timestamps]
         if self.use_prior_q_times:
             embeded_q_times = self.embed_prior_q_time(prior_q_times.unsqueeze(2))
             # zero embedding - if start token
             embeded_q_times[0, torch.where(answers[0, :] == 2)[0], :] = 0
-            exercise_sequence_components.append(embeded_q_times)
+            response_sequence_components.append(embeded_q_times)
 
         if self.use_agg_feats:
             embeded_agg_feats = self.embed_agg_feats(agg_feats)
@@ -189,10 +208,11 @@ class RIIDDTransformerModel(pl.LightningModule):
             #             / self.max_window_size
             #         )
             embeded_agg_feats[0, torch.where(answers[0, :] == 2)[0], :] = 0
-            exercise_sequence_components.append(embeded_agg_feats)
+            response_sequence_components.append(embeded_agg_feats)
 
+        r_w = F.softmax(self.response_weights, dim=0)
         embeded_responses = (
-            torch.stack(exercise_sequence_components, dim=3) * r_w
+            torch.stack(response_sequence_components, dim=3) * r_w
         ).sum(dim=3)
 
         # adding positional vector
@@ -279,14 +299,7 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     @auto_move_data
     def predict_fast_single_user(
-        self,
-        content_ids,
-        parts,
-        answers,
-        tags,
-        timestamps,
-        prior_q_times,
-        n=1,
+        self, content_ids, parts, answers, tags, timestamps, prior_q_times, n=1,
     ):
         """
         Predicts n steps for a single user in batch and return predictions
@@ -295,14 +308,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         length = len(content_ids)
         out_predictions = torch.zeros(n, device=self.device)
         for i in range(n, 0, -1):
-            preds = self(
-                content_ids,
-                parts,
-                answers,
-                tags,
-                timestamps,
-                prior_q_times,
-            )
+            preds = self(content_ids, parts, answers, tags, timestamps, prior_q_times,)
             out_predictions[n - i] = preds[length - i, 0]
 
             # answers are shifted (start token) so need + 1
@@ -406,7 +412,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="max", patience=5
+                optimizer, mode="max", patience=3, factor=0.5
             ),
             "monitor": "avg_val_auc",
             "interval": "step",

@@ -5,6 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 import h5py
 
+from scipy.stats import wasserstein_distance
 from utils import get_wd
 
 eps = 0.0000001
@@ -106,18 +107,103 @@ def get_questions_lectures_mean():
             [content_mean.answered_correctly.values, np.zeros(418)]
         )
         np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy",
-            content_mean,
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy", content_mean,
         )
         del df
 
     return content_mean
 
 
+def get_questions_lectures_std_wass():
+    """
+    Generates the std and wass distance between user_answers and actual answer on a question 
+    """
+    try:
+        questions_lectures_wass = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_wass.npy"
+        )
+        questions_lectures_std = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_std.npy"
+        )
+    except FileNotFoundError:
+        print("Generating questions lectures std/wass")
+        df = pd.read_pickle(f"{get_wd()}riiid_train.pkl.gzip")
+        questions_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/questions.csv")
+
+        user_answer_counts = (
+            df[~df.content_type_id][["content_id", "user_answer"]]
+            .groupby(["content_id", "user_answer"])
+            .user_answer.count()
+        )
+
+        user_answer_counts.name = "user_answer_count"
+        user_answer_counts = user_answer_counts.reset_index()
+
+        answer_counts = (
+            user_answer_counts.groupby("content_id")
+            .user_answer_count.sum()
+            .reset_index()
+            .rename(columns={"user_answer_count": "total_answers"})
+        )
+        user_answer_counts = pd.merge(
+            answer_counts, user_answer_counts, on="content_id", how="inner"
+        )
+        user_answer_counts["user_answer_count"] = (
+            user_answer_counts["user_answer_count"]
+            / user_answer_counts["total_answers"]
+        )
+        user_answer_counts = pd.merge(
+            questions_df[["question_id", "correct_answer"]],
+            user_answer_counts,
+            right_on="content_id",
+            left_on="question_id",
+            how="inner",
+        ).drop(columns=["question_id"])
+
+        user_answer_counts["correct"] = (
+            user_answer_counts["correct_answer"] == user_answer_counts["user_answer"]
+        ).astype(int)
+
+        def earth_move_dist_with_norm(rows):
+            d = wasserstein_distance(rows.user_answer_count.values, rows.correct.values)
+            return d
+
+        questions_lectures_wass = (
+            user_answer_counts.groupby("content_id")
+            .apply(lambda x: earth_move_dist_with_norm(x))
+            .values
+        )
+        questions_lectures_wass = np.concatenate(
+            [questions_lectures_wass, np.zeros(418)]
+        )
+
+        questions_lectures_std = (
+            user_answer_counts.groupby("content_id").user_answer_count.apply(
+                lambda x: np.std(x.values)
+            )
+        ) * 2  # times two so that max is close to 1
+
+        questions_lectures_std = np.concatenate([questions_lectures_std, np.zeros(418)])
+
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_wass.npy",
+            questions_lectures_std,
+        )
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_std.npy",
+            questions_lectures_std,
+        )
+
+        del df
+
+    return questions_lectures_wass, questions_lectures_std
+
+
 lectures_mapping = get_lectures_mapping()
 questions_lectures_parts = get_questions_lectures_parts()
 questions_lectures_tags = get_questions_lectures_tags()
 questions_lectures_mean = get_questions_lectures_mean()
+questions_lectures_wass, questions_lectures_std = get_questions_lectures_std_wass()
 
 
 def preprocess_df(df):

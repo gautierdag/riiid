@@ -1,4 +1,3 @@
-from torch.utils.data import random_split
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import (
@@ -38,6 +37,7 @@ def train(cfg) -> None:
     val_size = cfg["val_size"]
     accumulate_grad_batches = cfg["accumulate_grad_batches"]
     use_agg_feats = cfg["use_agg_feats"]
+    use_exercise_feats = cfg["use_exercise_feats"]
 
     train_loader, val_loader = get_dataloaders(
         batch_size=batch_size,
@@ -47,7 +47,6 @@ def train(cfg) -> None:
         num_workers=num_workers,
         use_agg_feats=use_agg_feats,
     )
-    # 4347MiB
 
     # Init our model
     model = RIIDDTransformerModel(
@@ -62,13 +61,14 @@ def train(cfg) -> None:
         use_prior_q_times=use_prior_q_times,
         lr_step_frequency=val_step_frequency,
         use_agg_feats=use_agg_feats,
+        use_exercise_feats=use_exercise_feats,
     )
 
     experiment_name = (
         f"base_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
         + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
         + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
-        + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_use_agg_{use_agg_feats}"
+        + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_use_agg_{use_agg_feats}_use_ex{use_exercise_feats}"
     )
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
@@ -94,9 +94,7 @@ def train(cfg) -> None:
 
     # Train the model ⚡
     trainer.fit(
-        model,
-        train_dataloader=train_loader,
-        val_dataloaders=[val_loader],
+        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set

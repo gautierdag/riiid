@@ -11,6 +11,8 @@ from preprocessing import (
     questions_lectures_tags,
     questions_lectures_parts,
     questions_lectures_mean,
+    questions_lectures_std,
+    questions_lectures_wass,
     generate_h5,
     DATA_FOLDER_PATH,
 )
@@ -51,26 +53,52 @@ def get_parts_agg_feats(q_idx, parts, answered_correctly):
     return parts_aggs
 
 
+def dfill(a):
+    n = a.size
+    b = np.concatenate([[0], np.where(a[:-1] != a[1:])[0] + 1, [n]])
+    return np.arange(n)[b[:-1]].repeat(np.diff(b))
+
+
+def argunsort(s):
+    n = s.size
+    u = np.empty(n, dtype=np.int64)
+    u[s] = np.arange(n)
+    return u
+
+
+def cumcount(a):
+    n = a.size
+    s = a.argsort(kind="mergesort")
+    i = argunsort(s)
+    b = a[s]
+    return (np.arange(n) - dfill(b))[i]
+
+
 def get_agg_feats(content_ids, answered_correctly, parts):
 
     # Calculate agg feats
     # question idx
     q_idx = np.where(answered_correctly != 4)[0]
 
-    # user mean
-    m_user_mean = np.zeros(len(content_ids))
-    m_user_mean[q_idx] = answered_correctly[q_idx].cumsum() / (
-        np.arange(len(q_idx)) + 1
-    )
-    # prevent leak
-    m_user_mean = np.roll(m_user_mean, 1)
-    m_user_mean[0] = 0
+    # attempts of question id
+    attempts = np.zeros(len(content_ids))
+    attempts[q_idx] = cumcount(content_ids[q_idx]).clip(max=5, min=0) / 5
 
     # content mean
     m_content_mean = np.zeros(len(content_ids))
     m_content_mean[q_idx] = questions_lectures_mean[content_ids][q_idx].cumsum() / (
         np.arange(len(q_idx)) + 1
     )
+
+    # user mean
+    m_user_mean = np.zeros(len(content_ids))
+    m_user_mean[q_idx] = answered_correctly[q_idx].cumsum() / (
+        np.arange(len(q_idx)) + 1
+    )
+
+    # prevent leak
+    m_user_mean = np.roll(m_user_mean, 1)
+    m_user_mean[0] = 0
 
     # part mean
     parts_mean = get_parts_agg_feats(q_idx, parts, answered_correctly)
@@ -80,9 +108,22 @@ def get_agg_feats(content_ids, answered_correctly, parts):
     parts_mean[0] = 0
 
     return np.concatenate(
-        [m_content_mean[..., np.newaxis], m_user_mean[..., np.newaxis], parts_mean],
+        [
+            attempts[..., np.newaxis],
+            m_content_mean[..., np.newaxis],
+            m_user_mean[..., np.newaxis],
+            parts_mean,
+        ],
         axis=1,
     )
+
+
+def get_exercises_feats(content_ids):
+    e_feats = np.zeros((len(content_ids), 3))
+    e_feats[:, 0] = questions_lectures_mean[content_ids]
+    e_feats[:, 1] = questions_lectures_std[content_ids]
+    e_feats[:, 2] = questions_lectures_wass[content_ids]
+    return e_feats
 
 
 class RIIDDataset(Dataset):
@@ -179,6 +220,9 @@ class RIIDDataset(Dataset):
         content_ids = content_ids[start_index:]
         answered_correctly = answered_correctly[start_index:]
 
+        # exercise feats
+        e_feats = get_exercises_feats(content_ids)
+
         # load in time stuff
         timestamps = self.cache[user_id]["timestamps"][
             start_index : start_index + window_size
@@ -214,6 +258,7 @@ class RIIDDataset(Dataset):
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
             else agg_feats,
+            "e_feats": e_feats,
             "length": window_size,
         }
 
@@ -239,6 +284,7 @@ def get_collate_fn(min_multiple=None, use_agg_feats=True):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
+            ("e_feats", 0),
         ]
 
         if use_agg_feats:

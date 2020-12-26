@@ -68,6 +68,29 @@ def get_questions_lectures_tags():
     return questions_lectures_tags
 
 
+def get_questions_lectures_bundles():
+    try:
+        questions_lectures_bundles = np.load(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_bundles.npy"
+        )
+
+    except FileNotFoundError:
+        print("Generating Bundles Mapping")
+        questions_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/questions.csv")
+        lectures_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/lectures.csv")
+        questions_lectures_bundles = np.concatenate(
+            [
+                questions_df["bundle_id"].values,
+                np.ones(len(lectures_df)) * questions_df["bundle_id"].max() + 1,
+            ]
+        ).astype(np.int)
+        np.save(
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_bundles.npy",
+            questions_lectures_bundles,
+        )
+    return questions_lectures_bundles
+
+
 def get_lectures_mapping():
     try:
         lectures_mapping = pickle.load(
@@ -203,6 +226,7 @@ def get_questions_lectures_std_wass():
 lectures_mapping = get_lectures_mapping()
 questions_lectures_parts = get_questions_lectures_parts()
 questions_lectures_tags = get_questions_lectures_tags()
+questions_lectures_bundles = get_questions_lectures_bundles()
 questions_lectures_mean = get_questions_lectures_mean()
 questions_lectures_wass, questions_lectures_std = get_questions_lectures_std_wass()
 

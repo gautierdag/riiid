@@ -40,7 +40,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_part=8,  # number of different parts = 7 + 1 (for padding)
         n_tags=189,  # number of different tags = 188 + 1 (for padding)
         n_correct=5,  # 0,1 (false, true), 2 (start token), 3 (padding), 4 (lecture)
-        n_agg_feats=10,  # number of agg feats
+        n_agg_feats=14,  # number of agg feats
         n_exercise_feats=3,  # number of exercise feats
         emb_dim=64,  # embedding dimension
         dropout=0.1,
@@ -177,7 +177,12 @@ class RIIDDTransformerModel(pl.LightningModule):
         embeded_content = self.embed_content_id(content_ids)
         embeded_parts = self.embed_parts(parts)
         embeded_tags = self.embed_tags(tags).sum(dim=2)
-        exercise_sequence_components = [embeded_content, embeded_parts, embeded_tags]
+
+        exercise_sequence_components = [
+            embeded_content,
+            embeded_parts,
+            embeded_tags,
+        ]
         if self.use_exercise_feats:
             embeded_exercise_feats = self.embed_exercise_features(e_feats)
             exercise_sequence_components.append(embeded_exercise_feats)
@@ -200,13 +205,6 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         if self.use_agg_feats:
             embeded_agg_feats = self.embed_agg_feats(agg_feats)
-            # progressively increase user experience
-            # embeded_agg_feats[:, torch.where(answers[0, :] == 2)[0], :] *= (
-            #             torch.arange(answers.shape[0], device=self.device, dtype=torch.float)[
-            #                 :, None, None
-            #             ]
-            #             / self.max_window_size
-            #         )
             embeded_agg_feats[0, torch.where(answers[0, :] == 2)[0], :] = 0
             response_sequence_components.append(embeded_agg_feats)
 
@@ -427,7 +425,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="max", patience=3, factor=0.5
+                optimizer, mode="max", patience=2, factor=0.5
             ),
             "monitor": "avg_val_auc",
             "interval": "step",

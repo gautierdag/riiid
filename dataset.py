@@ -23,6 +23,11 @@ import math
 import torch.nn.functional as F
 
 
+two_hours = 2 * 60 * 60 * 1000
+day = 12 * two_hours
+week = 7 * day
+
+
 def pad_to_multiple(tensor, multiple=128, pad_value=0):
     m = tensor.shape[0] / multiple
     if m.is_integer():
@@ -30,27 +35,6 @@ def pad_to_multiple(tensor, multiple=128, pad_value=0):
     remainder = math.ceil(m) * multiple - tensor.shape[0]
     pad_offset = (0,) * 2 * (len(tensor.shape) - 1)
     return F.pad(tensor, (*pad_offset, 0, remainder), value=pad_value)
-
-
-def get_parts_agg_feats(q_idx, parts, answered_correctly):
-    parts_aggs = np.zeros((len(parts), 7))
-
-    # select parts for only questions
-    p = parts[q_idx]
-
-    # get running counts of parts answered
-    count_parts = np.zeros((p.size, 7))
-    count_parts[np.arange(p.size), p - 1] = 1
-    count_parts = count_parts.cumsum(axis=0)
-
-    # get running sum of answered correctly for each part
-    answered_correctly_parts = np.zeros((p.size, 7))
-    answered_correctly_parts[np.arange(p.size), p - 1] = answered_correctly[q_idx]
-    answered_correctly_parts = answered_correctly_parts.cumsum(axis=0)
-
-    parts_aggs[q_idx, :] = answered_correctly_parts / (count_parts + 1)
-
-    return parts_aggs
 
 
 def dfill(a):
@@ -74,30 +58,141 @@ def cumcount(a):
     return (np.arange(n) - dfill(b))[i]
 
 
-def get_agg_feats(content_ids, answered_correctly, parts):
+def rolling_mean(a, n=500):
+    """
+    Does mean over a rolling window size (n)
+    """
+    if n == 0:
+        return np.zeros(a.size)
+    ret = np.cumsum(np.pad(a, (n - 1, 0), "constant"), dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1 :] / n
+
+
+def rolling_mean_2d(a, n=500):
+    """
+    Does mean over a rolling window size (n)
+    a is size (N, E) - where N is the axis to cumsum over
+    """
+    if n == 0:
+        return np.zeros(a.shape)
+    ret = np.cumsum(np.pad(a, ((n - 1, 0), (0, 0)), "constant"), dtype=float, axis=0)
+    ret[n:, :] = ret[n:, :] - ret[:-n, :]
+    return ret[n - 1 :, :] / n
+
+
+def rolling_mean_over_time(timestamps, arr, time_step=two_hours):
+    """
+    Calculates mean over array using timestamp and timestep
+    Uses a diff of time_step to start new section to average over
+    """
+    start_idxs = np.diff(timestamps, prepend=0) > time_step
+    start_idxs[0] = True
+    idxs = np.arange(len(start_idxs))
+    idxs[~start_idxs] = 0
+    start_idxs = np.maximum.accumulate(idxs)
+
+    # different way of splitting using actual rolling time window (slower)
+    # start_idxs = np.argmax(
+    #     ((timestamps[..., None] - timestamps[None, ...]) < hour), axis=1
+    # )
+
+    sums = arr.cumsum()
+    sums = np.where(start_idxs == 0, sums, sums - sums[start_idxs - 1])
+
+    counts = np.arange(len(timestamps))
+    counts = counts + 1 - start_idxs[counts]
+
+    return sums / counts
+
+
+def get_content_mean_feats(q_idx, content_ids, windows=[500, 1000, 2500]):
+
+    m_content_mean = np.zeros((len(content_ids), len(windows) + 1))
+
+    # content mean
+    m_content_mean[:, 0][q_idx] = questions_lectures_mean[content_ids][
+        q_idx
+    ].cumsum() / (np.arange(len(q_idx)) + 1)
+
+    # calculate rolling mean for window sizes 500, 1k and 2.5k
+    for i in range(1, len(windows) + 1):
+        m_content_mean[:, i][q_idx] = rolling_mean(
+            questions_lectures_mean[content_ids][q_idx], n=windows[i - 1]
+        )
+
+    return m_content_mean
+
+
+def get_user_mean_feats(q_idx, answered_correctly, windows=[500, 1000, 2500]):
+
+    m_user_mean = np.zeros((len(answered_correctly), len(windows) + 1))
+
+    # user mean
+    m_user_mean[:, 0][q_idx] = answered_correctly[q_idx].cumsum() / (
+        np.arange(len(q_idx)) + 1
+    )
+
+    # calculate rolling mean for window sizes 500, 1k and 2.5k
+    for i in range(1, len(windows) + 1):
+        m_user_mean[:, i][q_idx] = rolling_mean(
+            answered_correctly[q_idx], n=windows[i - 1]
+        )
+
+    return m_user_mean
+
+
+def get_parts_agg_feats(q_idx, parts, answered_correctly):
+    # select parts for only questions
+    p = parts[q_idx].astype(int)
+
+    # get running counts of parts answered
+    count_parts = np.zeros((p.size, 7), dtype=np.int)
+    count_parts[np.arange(p.size, dtype=np.int), p - 1] = 1
+    count_parts = count_parts.cumsum(axis=0)
+
+    # get running sum of answered correctly for each part
+    answered_correctly_parts = np.zeros((p.size, 7))
+    answered_correctly_parts[np.arange(p.size), p - 1] = answered_correctly[q_idx]
+
+    # answered_correctly_parts average
+    parts_aggs = np.zeros((len(parts), 7), dtype=np.float)
+    parts_aggs[q_idx] = answered_correctly_parts.cumsum(axis=0) / ((count_parts + 1))
+    return parts_aggs
+
+
+def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
 
     # Calculate agg feats
     # question idx
     q_idx = np.where(answered_correctly != 4)[0]
 
+    # get session number
+    session_splits = np.insert(np.where(np.diff(timestamps) > (two_hours), 1, 0), 0, 0)
+    session_number = ((np.cumsum(session_splits) // 10) / 10).clip(max=1, min=0)
+
     # attempts of question id
     attempts = np.zeros(len(content_ids))
     attempts[q_idx] = cumcount(content_ids[q_idx]).clip(max=5, min=0) / 5
 
+    windows = [500]
+
     # content mean
-    m_content_mean = np.zeros(len(content_ids))
-    m_content_mean[q_idx] = questions_lectures_mean[content_ids][q_idx].cumsum() / (
-        np.arange(len(q_idx)) + 1
+    m_content_mean = get_content_mean_feats(q_idx, content_ids, windows=windows)
+
+    # user session mean
+    m_user_session_mean = np.zeros(len(timestamps))
+    m_user_session_mean[q_idx] = rolling_mean_over_time(
+        timestamps[q_idx], answered_correctly[q_idx], time_step=two_hours
     )
+    m_user_session_mean = np.roll(m_user_session_mean, 1)
+    m_user_session_mean[0] = 0
 
     # user mean
-    m_user_mean = np.zeros(len(content_ids))
-    m_user_mean[q_idx] = answered_correctly[q_idx].cumsum() / (
-        np.arange(len(q_idx)) + 1
-    )
+    m_user_mean = get_user_mean_feats(q_idx, answered_correctly, windows=windows)
 
     # prevent leak
-    m_user_mean = np.roll(m_user_mean, 1)
+    m_user_mean = np.roll(m_user_mean, 1, axis=0)
     m_user_mean[0] = 0
 
     # part mean
@@ -110,12 +205,30 @@ def get_agg_feats(content_ids, answered_correctly, parts):
     return np.concatenate(
         [
             attempts[..., np.newaxis],
-            m_content_mean[..., np.newaxis],
-            m_user_mean[..., np.newaxis],
+            m_content_mean,
+            m_user_mean,
             parts_mean,
+            m_user_session_mean[..., np.newaxis],
+            session_number[..., np.newaxis],
         ],
         axis=1,
     )
+
+
+def bfill(arr):
+    mask = np.where(arr == 0, True, False)
+    idx = np.where(~mask, np.arange(mask.shape[0]), mask.shape[0] - 1)
+    idx = np.minimum.accumulate(idx[::-1], axis=0)[::-1]
+    return arr[idx]
+
+
+def process_prior_q_time(answered_correctly, prior_question_elapsed_time, timestamps):
+    q_idx = np.where(answered_correctly != 4)[0]
+    timestamp_diff_shifted = np.diff(timestamps[q_idx], append=0)
+    prior_q_time_shifted = np.roll(prior_question_elapsed_time[q_idx], -1)
+    this_q_time = bfill(np.where(timestamp_diff_shifted > 0, prior_q_time_shifted, 0))
+    prior_question_elapsed_time[q_idx] = this_q_time
+    return prior_question_elapsed_time
 
 
 def get_exercises_feats(content_ids):
@@ -206,30 +319,38 @@ class RIIDDataset(Dataset):
         answered_correctly = self.cache[user_id]["answered_correctly"][
             : start_index + window_size
         ].copy()
+        timestamps = self.cache[user_id]["timestamps"][
+            : start_index + window_size
+        ].copy()
 
         # get question parts
         parts = questions_lectures_parts[content_ids]
 
         agg_feats = None
         if self.use_agg_feats:
-            agg_feats = get_agg_feats(content_ids, answered_correctly, parts)
+            agg_feats = get_agg_feats(
+                content_ids, answered_correctly, parts, timestamps
+            )
             agg_feats = agg_feats[start_index:]
 
         # select to proper length
         parts = parts[start_index:]
         content_ids = content_ids[start_index:]
         answered_correctly = answered_correctly[start_index:]
+        timestamps = timestamps[start_index:]
 
         # exercise feats
         e_feats = get_exercises_feats(content_ids)
 
         # load in time stuff
-        timestamps = self.cache[user_id]["timestamps"][
-            start_index : start_index + window_size
-        ].copy()
         prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
             start_index : start_index + window_size
         ].copy()
+
+        # shift and process prior_q_times according to bundle
+        prior_q_times = process_prior_q_time(
+            answered_correctly, prior_q_times, timestamps
+        )
 
         # convert timestamps to time elapsed
         time_elapsed_timestamps = get_time_elapsed_from_timestamp(timestamps)
@@ -324,57 +445,54 @@ def get_collate_fn(min_multiple=None, use_agg_feats=True):
 
 def get_train_val_idxs(
     df,
-    train_size=90000000,
     validation_size=2500000,
     new_user_prob=0.25,
     use_lectures=True,
 ):
-    try:
-        train_idxs = np.load(
-            f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy"
-        )
-        val_idxs = np.load(
-            f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy"
-        )
+    # try:
+    #     train_idxs = np.load(
+    #         f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy"
+    #     )
+    #     val_idxs = np.load(
+    #         f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy"
+    #     )
 
-    except FileNotFoundError:
-        train_idxs = []
-        val_idxs = []
+    # except FileNotFoundError:
+    train_idxs = []
+    val_idxs = []
 
-        # create df with user_ids and indices
-        tmp_df = df[~df.content_type_id][["user_id"]].copy()
-        if not use_lectures:
-            tmp_df.reset_index(drop=True, inplace=True)
+    # create df with user_ids and indices
+    tmp_df = df[~df.content_type_id][["user_id"]].copy()
+    if not use_lectures:
+        tmp_df.reset_index(drop=True, inplace=True)
 
-        tmp_df["index"] = tmp_df.index.values.astype(np.uint32)
-        user_id_index = tmp_df.groupby("user_id")["index"].apply(np.array)
+    tmp_df["index"] = tmp_df.index.values.astype(np.uint32)
+    user_id_index = tmp_df.groupby("user_id")["index"].apply(np.array)
 
-        # iterate over users in random order
-        for indices in user_id_index.sample(user_id_index.size, random_state=69):
-            if len(train_idxs) > train_size:
-                break
-            # fill validation data
-            if len(val_idxs) < validation_size:
-                # add new user
-                if np.random.rand() < new_user_prob:
-                    val_idxs += list(indices)
+    # iterate over users in random order
+    for indices in user_id_index.sample(user_id_index.size, random_state=69):
+        # fill validation data
+        if len(val_idxs) < validation_size:
+            # add new user
+            if np.random.rand() < new_user_prob:
+                val_idxs += list(indices)
 
-                # randomly split user between train and val otherwise
-                else:
-                    offset = np.random.randint(0, indices.size)
-                    train_idxs += list(indices[:offset])
-                    val_idxs += list(indices[offset:])
+            # randomly split user between train and val otherwise
             else:
-                train_idxs += list(indices)
+                offset = np.random.randint(0, indices.size)
+                train_idxs += list(indices[:offset])
+                val_idxs += list(indices[offset:])
+        else:
+            train_idxs += list(indices)
 
-        np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy",
-            train_idxs,
-        )
-        np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy",
-            val_idxs,
-        )
+        # np.save(
+        #     f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy",
+        #     train_idxs,
+        # )
+        # np.save(
+        #     f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy",
+        #     val_idxs,
+        # )
     return train_idxs, val_idxs
 
 
@@ -411,6 +529,9 @@ def get_dataloaders(
         use_agg_feats=use_agg_feats,
     )
     print(f"len(dataset): {len(dataset)}")
+
+    print("Select user history with more than 256 rows")
+    df = df[user_history <= 256]
 
     print("Creating Train/Split")
     q_train_indices, q_valid_indices = get_train_val_idxs(df, use_lectures=use_lectures)

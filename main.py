@@ -65,7 +65,7 @@ def train(cfg) -> None:
     )
 
     experiment_name = (
-        f"base_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
+        f"YOUNG_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
         + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
         + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
         + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_use_agg_{use_agg_feats}_use_ex{use_exercise_feats}"
@@ -94,7 +94,9 @@ def train(cfg) -> None:
 
     # Train the model ⚡
     trainer.fit(
-        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
+        model,
+        train_dataloader=train_loader,
+        val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set

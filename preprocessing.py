@@ -238,6 +238,9 @@ def preprocess_df(df):
     """
     df.content_type_id = df.content_type_id.astype(bool)
 
+    # prior explanation
+    df.prior_question_had_explanation = df.prior_question_had_explanation.fillna(False).astype(bool)
+
     # prior time
     df.prior_question_elapsed_time = (
         df.prior_question_elapsed_time.fillna(0).clip(upper=300000) / 300000
@@ -279,7 +282,7 @@ def generate_h5(df, file_name="feats.h5"):
                 "content_id",
                 "answered_correctly",
                 "timestamp",
-                "prior_question_elapsed_time",
+                "prior_question_elapsed_time"
             ]
         ].values
 
@@ -297,6 +300,11 @@ def generate_h5(df, file_name="feats.h5"):
         hf.create_dataset(
             f"{user_id}/prior_question_elapsed_time",
             data=processed_feats[:, 3],
+            maxshape=(None,),
+        )
+        hf.create_dataset(
+            f"{user_id}/prior_question_had_explanation",
+            data=data['prior_question_had_explanation'],
             maxshape=(None,),
         )
 

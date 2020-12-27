@@ -54,7 +54,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         use_prior_q_explanation=False,
         use_agg_feats=False,
         use_exercise_feats=False,
-        lr_step_frequency=2500,
+        lr_step_frequency=2000,
     ):
         super(RIIDDTransformerModel, self).__init__()
         self.model_type = "RiiidTransformer"
@@ -93,12 +93,12 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         # embed prior q time and q explanation
         self.embed_prior_q_time = nn.Linear(1, emb_dim)
-        self.embed_prior_q_explanation = nn.Embedding(2, emb_dim)
+        self.embed_prior_q_explanation = nn.Embedding(3, emb_dim)
 
         self.embed_agg_feats = nn.Linear(n_agg_feats, emb_dim)
 
         # response weights to weight the mean embeded response embeddings
-        r_w = [0.5, 0.5]
+        r_w = [0.5, 0.5, 0.5]
         if use_prior_q_times:
             r_w.append(0.5)
         if use_agg_feats:
@@ -154,6 +154,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         tags,
         timestamps,
         prior_q_times,
+        prior_q_exps,
         agg_feats,
         e_feats,
     ):
@@ -168,6 +169,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             tags = tags.unsqueeze(1)
             timestamps = timestamps.unsqueeze(1)
             prior_q_times = prior_q_times.unsqueeze(1)
+            prior_q_exps = prior_q_exps.unsqueeze(1)
             if self.use_agg_feats:
                 agg_feats = agg_feats.unsqueeze(1)
             if self.use_exercise_feats:
@@ -202,6 +204,9 @@ class RIIDDTransformerModel(pl.LightningModule):
             # zero embedding - if start token
             embeded_q_times[0, torch.where(answers[0, :] == 2)[0], :] = 0
             response_sequence_components.append(embeded_q_times)
+
+        embeded_q_exps = self.embed_prior_q_explanation(prior_q_exps)
+        response_sequence_components.append(embeded_q_exps)
 
         if self.use_agg_feats:
             embeded_agg_feats = self.embed_agg_feats(agg_feats)
@@ -244,6 +249,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["tags"],
             batch["timestamps"],
             batch["prior_q_times"],
+            batch["prior_q_exps"],
             batch["agg_feats"] if self.use_agg_feats else None,
             batch["e_feats"] if self.use_exercise_feats else None,
         )

@@ -69,6 +69,7 @@ def train(cfg) -> None:
         + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
         + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
         + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_use_agg_{use_agg_feats}_use_ex{use_exercise_feats}"
+        "_prior_explanation"
     )
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 

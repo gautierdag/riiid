@@ -221,6 +221,20 @@ def bfill(arr):
     idx = np.minimum.accumulate(idx[::-1], axis=0)[::-1]
     return arr[idx]
 
+def bfill2(arr):
+    mask = np.where(arr == 2, True, False)
+    idx = np.where(~mask, np.arange(mask.shape[0]), mask.shape[0] - 1)
+    idx = np.minimum.accumulate(idx[::-1], axis=0)[::-1]
+    return arr[idx]
+
+def process_prior_q_time2(answered_correctly, prior_question_elapsed_time, timestamps):
+    q_idx = np.where(answered_correctly != 4)[0]
+    timestamp_diff_shifted = np.diff(timestamps[q_idx], append=0)
+    prior_q_time_shifted = np.roll(prior_question_elapsed_time[q_idx], -1)
+    this_q_time = bfill2(np.where(timestamp_diff_shifted > 0, prior_q_time_shifted, 2))
+    prior_question_elapsed_time = np.where(this_q_time==2, 0, this_q_time)
+    return prior_question_elapsed_time
+
 
 def process_prior_q_time(answered_correctly, prior_question_elapsed_time, timestamps):
     q_idx = np.where(answered_correctly != 4)[0]
@@ -286,6 +300,9 @@ class RIIDDataset(Dataset):
             "prior_question_elapsed_time": np.array(
                 self.f[f"{user_id}/prior_question_elapsed_time"], dtype=np.float32
             ),
+            "prior_question_had_explanation": np.array(
+                self.f[f"{user_id}/prior_question_had_explanation"], dtype=np.float32
+            ),
         }
 
     def __getitem__(self, idx):
@@ -347,9 +364,19 @@ class RIIDDataset(Dataset):
             start_index : start_index + window_size
         ].copy()
 
+        # explanations
+        prior_q_exp = self.cache[user_id]["prior_question_had_explanation"][
+            start_index : start_index + window_size
+        ].copy().astype(int)
+
         # shift and process prior_q_times according to bundle
         prior_q_times = process_prior_q_time(
             answered_correctly, prior_q_times, timestamps
+        )
+
+        # shift and process prior_q_exp according to bundle
+        prior_q_exps = process_prior_q_time2(
+            answered_correctly, prior_q_exp, timestamps
         )
 
         # convert timestamps to time elapsed
@@ -376,6 +403,7 @@ class RIIDDataset(Dataset):
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
+            "prior_q_exps": torch.from_numpy(prior_q_exps).long(),
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
             else agg_feats,
@@ -405,6 +433,7 @@ def get_collate_fn(min_multiple=None, use_agg_feats=True):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
+            ("prior_q_exps", 2),
             ("e_feats", 0),
         ]
 

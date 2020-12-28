@@ -1,5 +1,7 @@
 *.gzip
+*.zip
 *.h5
+*.p
 lightning_logs/
 outputs/
 config.yaml

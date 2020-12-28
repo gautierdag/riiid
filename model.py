@@ -54,7 +54,6 @@ class RIIDDTransformerModel(pl.LightningModule):
         use_prior_q_times=False,
         use_agg_feats=False,
         use_exercise_feats=False,
-        use_bundle_attention=False,
         lr_step_frequency=2000,
     ):
         super(RIIDDTransformerModel, self).__init__()
@@ -64,7 +63,6 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.max_window_size = max_window_size
         self.n_heads = n_heads
 
-        self.use_bundle_attention = use_bundle_attention
         self.use_prior_q_times = use_prior_q_times
         self.use_agg_feats = use_agg_feats
         self.use_exercise_feats = use_exercise_feats

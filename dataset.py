@@ -236,6 +236,7 @@ class RIIDDataset(Dataset):
         hdf5_file="feats.h5",
         window_size=100,
         use_agg_feats=True,
+        use_e_feats=True,
     ):
         """
         Args:
@@ -250,6 +251,7 @@ class RIIDDataset(Dataset):
         self.hdf5_file = f"{hdf5_file}"
         self.max_window_size = window_size
         self.use_agg_feats = use_agg_feats
+        self.use_e_feats = use_e_feats
         self.cache = {}
 
     def open_hdf5(self):
@@ -272,9 +274,6 @@ class RIIDDataset(Dataset):
             "timestamps": np.array(self.f[f"{user_id}/timestamps"], dtype=np.float32),
             "prior_question_elapsed_time": np.array(
                 self.f[f"{user_id}/prior_question_elapsed_time"], dtype=np.float32
-            ),
-            "prior_question_had_explanation": np.array(
-                self.f[f"{user_id}/prior_question_had_explanation"], dtype=np.float32
             ),
         }
 
@@ -323,15 +322,17 @@ class RIIDDataset(Dataset):
             )
             agg_feats = agg_feats[start_index:]
 
-        # exercise feats
-        e_feats = get_exercises_feats(content_ids)
+        e_feats = None
+        if self.use_e_feats:
+            # exercise feats
+            e_feats = get_exercises_feats(content_ids)
+            e_feats = e_feats[start_index:]
 
         # select to proper length
         parts = parts[start_index:]
         content_ids = content_ids[start_index:]
         answered_correctly = answered_correctly[start_index:]
         timestamps = timestamps[start_index:]
-        e_feats = e_feats[start_index:]
 
         # load in time stuff
         prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
@@ -361,18 +362,19 @@ class RIIDDataset(Dataset):
             "answered_correctly": torch.from_numpy(answered_correctly).float(),
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
-            "raw_timestamps": torch.from_numpy(timestamps),
+            "raw_timestamps": torch.from_numpy(timestamps).long(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
-            "prior_q_exps": torch.from_numpy(prior_q_exps).long(),
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
             else agg_feats,
-            "e_feats": torch.from_numpy(e_feats).float(),
+            "e_feats": torch.from_numpy(e_feats).float()
+            if e_feats is not None
+            else e_feats,
             "length": window_size,
         }
 
 
-def get_collate_fn(use_agg_feats=True):
+def get_collate_fn(use_agg_feats=True, use_e_feats=True):
     def collate_fn(batch):
         """
         The collate function is used to merge individual data samples into a batch
@@ -393,13 +395,13 @@ def get_collate_fn(use_agg_feats=True):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
-            ("prior_q_exps", 2),
-            ("e_feats", 0),
             ("raw_timestamps", 0),
         ]
 
         if use_agg_feats:
             PADDING_LIST.append(("agg_feats", 0))
+        if use_e_feats:
+            PADDING_LIST.append(("e_feats", 0))
 
         # padding list
         for (key, padding) in PADDING_LIST:
@@ -430,14 +432,6 @@ def get_collate_fn(use_agg_feats=True):
 def get_train_val_idxs(
     df, validation_size=2500000, new_user_prob=0.25, use_lectures=True,
 ):
-    # try:
-    #     train_idxs = np.load(
-    #         f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy"
-    #     )
-    #     val_idxs = np.load(
-    #         f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy"
-    #     )
-
     # except FileNotFoundError:
     train_idxs = []
     val_idxs = []
@@ -466,14 +460,6 @@ def get_train_val_idxs(
         else:
             train_idxs += list(indices)
 
-        # np.save(
-        #     f"{get_wd()}{DATA_FOLDER_PATH}/train_{train_size}_lec_{use_lectures}.npy",
-        #     train_idxs,
-        # )
-        # np.save(
-        #     f"{get_wd()}{DATA_FOLDER_PATH}/val_{validation_size}_lec_{use_lectures}.npy",
-        #     val_idxs,
-        # )
     return train_idxs, val_idxs
 
 
@@ -484,6 +470,7 @@ def get_dataloaders(
     use_lectures=True,
     num_workers=0,
     use_agg_feats=True,
+    use_e_feats=True,
 ):
 
     print("Reading pickle")
@@ -507,6 +494,7 @@ def get_dataloaders(
         hdf5_file=h5_file_name,
         window_size=max_window_size,
         use_agg_feats=use_agg_feats,
+        use_e_feats=use_e_feats,
     )
     print(f"len(dataset): {len(dataset)}")
 
@@ -524,14 +512,14 @@ def get_dataloaders(
         dataset=Subset(dataset, q_train_indices),
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=get_collate_fn(use_agg_feats=use_agg_feats),
+        collate_fn=get_collate_fn(use_agg_feats=use_agg_feats, use_e_feats=use_e_feats),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),  # if GPU then pin memory for perf
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
         batch_size=validation_batch_size,
-        collate_fn=get_collate_fn(use_agg_feats=use_agg_feats),
+        collate_fn=get_collate_fn(use_agg_feats=use_agg_feats, use_e_feats=use_e_feats),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )

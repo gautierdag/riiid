@@ -106,8 +106,7 @@ def get_questions_lectures_mean():
             [content_mean.answered_correctly.values, np.zeros(418)]
         )
         np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy",
-            content_mean,
+            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_mean.npy", content_mean,
         )
         del df
 
@@ -206,7 +205,6 @@ def get_questions_lectures_pct():
     return questions_lectures_pct
 
 
-
 lectures_mapping = get_lectures_mapping()
 questions_lectures_parts = get_questions_lectures_parts()
 questions_lectures_tags = get_questions_lectures_tags()
@@ -221,9 +219,6 @@ def preprocess_df(df):
     Adds the answered_correctly column if not exists
     """
     df.content_type_id = df.content_type_id.astype(bool)
-
-    # prior explanation
-    df.prior_question_had_explanation = df.prior_question_had_explanation.fillna(False).astype(bool)
 
     # prior time
     df.prior_question_elapsed_time = (
@@ -261,30 +256,19 @@ def generate_h5(df, file_name="feats.h5"):
                 "content_id",
                 "answered_correctly",
                 "timestamp",
-                "prior_question_elapsed_time"
+                "prior_question_elapsed_time",
             ]
         ].values
 
         hf.create_dataset(
-            f"{user_id}/content_ids", data=processed_feats[:, 0], maxshape=(None,)
+            f"{user_id}/content_ids", data=processed_feats[:, 0],
         )
         hf.create_dataset(
-            f"{user_id}/answered_correctly",
-            data=processed_feats[:, 1],
-            maxshape=(None,),
+            f"{user_id}/answered_correctly", data=processed_feats[:, 1],
         )
+        hf.create_dataset(f"{user_id}/timestamps", data=processed_feats[:, 2])
         hf.create_dataset(
-            f"{user_id}/timestamps", data=processed_feats[:, 2], maxshape=(None,)
-        )
-        hf.create_dataset(
-            f"{user_id}/prior_question_elapsed_time",
-            data=processed_feats[:, 3],
-            maxshape=(None,),
-        )
-        hf.create_dataset(
-            f"{user_id}/prior_question_had_explanation",
-            data=data['prior_question_had_explanation'],
-            maxshape=(None,),
+            f"{user_id}/prior_question_elapsed_time", data=processed_feats[:, 3],
         )
 
     hf.close()

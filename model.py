@@ -5,6 +5,7 @@ from torch.nn import functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
+from typing import Optional
 
 
 def init_weights(m):
@@ -32,6 +33,70 @@ class PositionalEncoding(nn.Module):
         return self.pe[:sequence_length, :]
 
 
+class CustomTransformerDecoderLayer(nn.TransformerDecoderLayer):
+    """
+    Decoder without additive step in self-attention
+    """
+
+    def __init__(
+        self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation="relu"
+    ):
+        super(CustomTransformerDecoderLayer, self).__init__(
+            d_model,
+            nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation=activation,
+        )
+        self.model_type = "CustomTransformerDecoderLayer"
+
+    def forward(
+        self,
+        tgt: torch.Tensor,
+        memory: torch.Tensor,
+        tgt_mask: Optional[torch.Tensor] = None,
+        memory_mask: Optional[torch.Tensor] = None,
+        tgt_key_padding_mask: Optional[torch.Tensor] = None,
+        memory_key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+        tgt2 = self.self_attn(
+            tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask
+        )[0]
+        tgt = self.dropout1(tgt2)
+        tgt = self.norm1(tgt)
+        tgt2 = self.multihead_attn(
+            tgt,
+            memory,
+            memory,
+            attn_mask=memory_mask,
+            key_padding_mask=memory_key_padding_mask,
+        )[0]
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
+        tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
+        tgt = tgt + self.dropout3(tgt2)
+        tgt = self.norm3(tgt)
+        return tgt
+
+
+def get_custom_decoder(
+    d_model=64,
+    dim_feedforward=256,
+    n_heads=2,
+    num_decoder_layers=2,
+    dropout=0.0,
+    activation="relu",
+):
+    return nn.TransformerDecoder(
+        CustomTransformerDecoderLayer(
+            d_model, n_heads, dim_feedforward, dropout=dropout, activation=activation
+        ),
+        num_decoder_layers,
+        nn.LayerNorm(d_model),
+    )
+
+
 class RIIDDTransformerModel(pl.LightningModule):
     def __init__(
         self,
@@ -51,9 +116,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         activation: str = "relu",
         max_window_size=100,
         use_prior_q_times=False,
-        use_prior_q_explanation=False,
         use_agg_feats=False,
         use_exercise_feats=False,
+        use_bundle_attention=False,
         lr_step_frequency=2000,
     ):
         super(RIIDDTransformerModel, self).__init__()
@@ -63,8 +128,8 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.max_window_size = max_window_size
         self.n_heads = n_heads
 
+        self.use_bundle_attention = use_bundle_attention
         self.use_prior_q_times = use_prior_q_times
-        self.use_prior_q_explanation = use_prior_q_explanation
         self.use_agg_feats = use_agg_feats
         self.use_exercise_feats = use_exercise_feats
 
@@ -92,14 +157,13 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         self.embed_timestamps = nn.Linear(1, emb_dim)
 
-        # embed prior q time and q explanation
-        self.embed_prior_q_time = nn.Linear(1, emb_dim)
-        self.embed_prior_q_explanation = nn.Embedding(3, emb_dim)
+        r_w = [0.5, 0.5]
 
+        # embed prior q time
+        self.embed_prior_q_time = nn.Linear(1, emb_dim)
         self.embed_agg_feats = nn.Linear(n_agg_feats, emb_dim)
 
         # response weights to weight the mean embeded response embeddings
-        r_w = [0.5, 0.5, 0.5]
         if use_prior_q_times:
             r_w.append(0.5)
         if use_agg_feats:
@@ -110,15 +174,35 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         # Transformer component
         self.pos_encoder = PositionalEncoding(emb_dim)
-        self.transformer = nn.Transformer(
-            d_model=emb_dim,
-            nhead=n_heads,
-            num_encoder_layers=n_encoder_layers,
-            num_decoder_layers=n_decoder_layers,
-            dropout=dropout,
-            dim_feedforward=dim_feedforward,
-            activation=activation,
-        )
+
+        if self.use_bundle_attention:
+            custom_decoder = get_custom_decoder(
+                d_model=emb_dim,
+                dim_feedforward=dim_feedforward,
+                n_heads=n_heads,
+                num_decoder_layers=n_decoder_layers,
+                dropout=dropout,
+                activation=activation,
+            )
+            self.transformer = nn.Transformer(
+                d_model=emb_dim,
+                nhead=n_heads,
+                num_encoder_layers=n_encoder_layers,
+                custom_decoder=custom_decoder,
+                dropout=dropout,
+                dim_feedforward=dim_feedforward,
+                activation=activation,
+            )
+        else:
+            self.transformer = nn.Transformer(
+                d_model=emb_dim,
+                nhead=n_heads,
+                num_encoder_layers=n_encoder_layers,
+                num_decoder_layers=n_decoder_layers,
+                dropout=dropout,
+                dim_feedforward=dim_feedforward,
+                activation=activation,
+            )
 
         self.out_linear = nn.Linear(emb_dim, 2)
         init_weights(self)
@@ -149,14 +233,12 @@ class RIIDDTransformerModel(pl.LightningModule):
             .transpose(0, 1)
             .float()
         )
-        # combine mask with bundle mask using timestamp
-        mask = (
-            mask
-            + ((timestamps.unsqueeze(1) - timestamps.unsqueeze(2)) == 0)
-            - torch.eye(sz, device=self.device)  # allow attending to self
-        )
+        bundle_mask = ((timestamps.unsqueeze(1) - timestamps.unsqueeze(2)) == 0).float()
+        bundle_mask = torch.roll(bundle_mask, 1, dims=2)
+        bundle_mask[:, :, 0] = 0.0
+        mask = (bundle_mask + mask).float()
         mask = mask.masked_fill(mask > 0, float("-inf"))
-        return torch.cat(self.n_heads * [mask])
+        return torch.cat(self.n_heads * [mask]).float()
 
     def get_random_steps(self, lengths, max_steps=10):
         """
@@ -181,7 +263,6 @@ class RIIDDTransformerModel(pl.LightningModule):
         tags,
         timestamps,
         prior_q_times,
-        prior_q_exps,
         agg_feats,
         e_feats,
         raw_timestamps,
@@ -219,9 +300,6 @@ class RIIDDTransformerModel(pl.LightningModule):
             embeded_q_times[0, torch.where(answers[0, :] == 2)[0], :] = 0
             response_sequence_components.append(embeded_q_times)
 
-        embeded_q_exps = self.embed_prior_q_explanation(prior_q_exps)
-        response_sequence_components.append(embeded_q_exps)
-
         if self.use_agg_feats:
             embeded_agg_feats = self.embed_agg_feats(agg_feats)
             embeded_agg_feats[0, torch.where(answers[0, :] == 2)[0], :] = 0
@@ -243,15 +321,22 @@ class RIIDDTransformerModel(pl.LightningModule):
         top_right_attention_mask = self.generate_square_subsequent_mask(
             sequence_length
         ).type_as(embeded_exercises)
-        bundle_attention = self.generate_decoder_mask(raw_timestamps).type_as(
-            embeded_exercises
-        )
-        output = self.transformer(
-            embeded_exercises,
-            embeded_responses,
-            tgt_mask=bundle_attention,  # (T,T)
-            src_mask=top_right_attention_mask,  # (S,S)
-        )
+
+        if self.use_bundle_attention:
+            bundle_attention = self.generate_decoder_mask(raw_timestamps)
+            output = self.transformer(
+                embeded_exercises,
+                embeded_responses,
+                tgt_mask=bundle_attention,  # (T,T)
+                src_mask=top_right_attention_mask,  # (S,S)
+            )
+        else:
+            output = self.transformer(
+                embeded_exercises,
+                embeded_responses,
+                tgt_mask=top_right_attention_mask,  # (T,T)
+                src_mask=top_right_attention_mask,  # (S,S)
+            )
 
         output = self.out_linear(output)
         return F.softmax(output, dim=2)[:, :, 1]
@@ -265,7 +350,6 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["tags"],
             batch["timestamps"],
             batch["prior_q_times"],
-            batch["prior_q_exps"],
             batch["agg_feats"] if self.use_agg_feats else None,
             batch["e_feats"] if self.use_exercise_feats else None,
             batch["raw_timestamps"],

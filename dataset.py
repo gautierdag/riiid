@@ -7,12 +7,12 @@ import numpy as np
 import h5py
 
 from preprocessing import (
-    get_time_elapsed_from_timestamp,
     questions_lectures_tags,
     questions_lectures_parts,
     questions_lectures_mean,
     questions_lectures_std,
     questions_lectures_wass,
+    questions_lectures_pct,
     generate_h5,
     DATA_FOLDER_PATH,
 )
@@ -24,17 +24,19 @@ import torch.nn.functional as F
 
 
 two_hours = 2 * 60 * 60 * 1000
-day = 12 * two_hours
-week = 7 * day
+eps = 0.0000001
 
 
-def pad_to_multiple(tensor, multiple=128, pad_value=0):
-    m = tensor.shape[0] / multiple
-    if m.is_integer():
-        return tensor
-    remainder = math.ceil(m) * multiple - tensor.shape[0]
-    pad_offset = (0,) * 2 * (len(tensor.shape) - 1)
-    return F.pad(tensor, (*pad_offset, 0, remainder), value=pad_value)
+# def ffill(arr):
+#     mask = np.where(arr == 0, True, False)
+#     idx = np.where(~mask, np.arange(mask.shape[0]), 0)
+#     np.maximum.accumulate(idx, axis=0, out=idx)
+#     return arr[idx]
+
+
+def get_time_elapsed_from_timestamp(arr):
+    arr_seconds = np.diff(arr, prepend=0) / 1000
+    return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
 
 
 def dfill(a):
@@ -215,41 +217,12 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
     )
 
 
-def bfill(arr):
-    mask = np.where(arr == 0, True, False)
-    idx = np.where(~mask, np.arange(mask.shape[0]), mask.shape[0] - 1)
-    idx = np.minimum.accumulate(idx[::-1], axis=0)[::-1]
-    return arr[idx]
-
-def bfill2(arr):
-    mask = np.where(arr == 2, True, False)
-    idx = np.where(~mask, np.arange(mask.shape[0]), mask.shape[0] - 1)
-    idx = np.minimum.accumulate(idx[::-1], axis=0)[::-1]
-    return arr[idx]
-
-def process_prior_q_time2(answered_correctly, prior_question_elapsed_time, timestamps):
-    q_idx = np.where(answered_correctly != 4)[0]
-    timestamp_diff_shifted = np.diff(timestamps[q_idx], append=0)
-    prior_q_time_shifted = np.roll(prior_question_elapsed_time[q_idx], -1)
-    this_q_time = bfill2(np.where(timestamp_diff_shifted > 0, prior_q_time_shifted, 2))
-    prior_question_elapsed_time = np.where(this_q_time==2, 0, this_q_time)
-    return prior_question_elapsed_time
-
-
-def process_prior_q_time(answered_correctly, prior_question_elapsed_time, timestamps):
-    q_idx = np.where(answered_correctly != 4)[0]
-    timestamp_diff_shifted = np.diff(timestamps[q_idx], append=0)
-    prior_q_time_shifted = np.roll(prior_question_elapsed_time[q_idx], -1)
-    this_q_time = bfill(np.where(timestamp_diff_shifted > 0, prior_q_time_shifted, 0))
-    prior_question_elapsed_time[q_idx] = this_q_time
-    return prior_question_elapsed_time
-
-
 def get_exercises_feats(content_ids):
-    e_feats = np.zeros((len(content_ids), 3))
+    e_feats = np.zeros((len(content_ids), 4))
     e_feats[:, 0] = questions_lectures_mean[content_ids]
     e_feats[:, 1] = questions_lectures_std[content_ids]
     e_feats[:, 2] = questions_lectures_wass[content_ids]
+    e_feats[:, 3] = questions_lectures_pct[content_ids]
     return e_feats
 
 
@@ -350,34 +323,20 @@ class RIIDDataset(Dataset):
             )
             agg_feats = agg_feats[start_index:]
 
+        # exercise feats
+        e_feats = get_exercises_feats(content_ids)
+
         # select to proper length
         parts = parts[start_index:]
         content_ids = content_ids[start_index:]
         answered_correctly = answered_correctly[start_index:]
         timestamps = timestamps[start_index:]
-
-        # exercise feats
-        e_feats = get_exercises_feats(content_ids)
+        e_feats = e_feats[start_index:]
 
         # load in time stuff
         prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
             start_index : start_index + window_size
         ].copy()
-
-        # explanations
-        prior_q_exp = self.cache[user_id]["prior_question_had_explanation"][
-            start_index : start_index + window_size
-        ].copy().astype(int)
-
-        # shift and process prior_q_times according to bundle
-        prior_q_times = process_prior_q_time(
-            answered_correctly, prior_q_times, timestamps
-        )
-
-        # shift and process prior_q_exp according to bundle
-        prior_q_exps = process_prior_q_time2(
-            answered_correctly, prior_q_exp, timestamps
-        )
 
         # convert timestamps to time elapsed
         time_elapsed_timestamps = get_time_elapsed_from_timestamp(timestamps)
@@ -402,6 +361,7 @@ class RIIDDataset(Dataset):
             "answered_correctly": torch.from_numpy(answered_correctly).float(),
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
+            "raw_timestamps": torch.from_numpy(timestamps),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
             "prior_q_exps": torch.from_numpy(prior_q_exps).long(),
             "agg_feats": torch.from_numpy(agg_feats).float()
@@ -412,7 +372,7 @@ class RIIDDataset(Dataset):
         }
 
 
-def get_collate_fn(min_multiple=None, use_agg_feats=True):
+def get_collate_fn(use_agg_feats=True):
     def collate_fn(batch):
         """
         The collate function is used to merge individual data samples into a batch
@@ -435,6 +395,7 @@ def get_collate_fn(min_multiple=None, use_agg_feats=True):
             ("prior_q_times", 0),
             ("prior_q_exps", 2),
             ("e_feats", 0),
+            ("raw_timestamps", 0),
         ]
 
         if use_agg_feats:
@@ -447,12 +408,6 @@ def get_collate_fn(min_multiple=None, use_agg_feats=True):
                 batch_first=False,
                 padding_value=padding,
             )
-
-            if min_multiple is not None:
-                # apply special padding
-                items[key] = pad_to_multiple(
-                    items[key], multiple=min_multiple, pad_value=padding
-                )
 
         new_max_length = items["answered_correctly"].shape[0]
         # mask to weight loss by (S, N)
@@ -473,10 +428,7 @@ def get_collate_fn(min_multiple=None, use_agg_feats=True):
 
 
 def get_train_val_idxs(
-    df,
-    validation_size=2500000,
-    new_user_prob=0.25,
-    use_lectures=True,
+    df, validation_size=2500000, new_user_prob=0.25, use_lectures=True,
 ):
     # try:
     #     train_idxs = np.load(
@@ -531,7 +483,6 @@ def get_dataloaders(
     max_window_size=100,
     use_lectures=True,
     num_workers=0,
-    min_multiple=None,
     use_agg_feats=True,
 ):
 
@@ -559,8 +510,8 @@ def get_dataloaders(
     )
     print(f"len(dataset): {len(dataset)}")
 
-    print("Select user history with more than 256 rows")
-    df = df[user_history <= 256]
+    # print("Select user history with less than 256 rows")
+    # df = df[user_history <= 256]
 
     print("Creating Train/Split")
     q_train_indices, q_valid_indices = get_train_val_idxs(df, use_lectures=use_lectures)
@@ -573,18 +524,14 @@ def get_dataloaders(
         dataset=Subset(dataset, q_train_indices),
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=get_collate_fn(
-            min_multiple=min_multiple, use_agg_feats=use_agg_feats
-        ),
+        collate_fn=get_collate_fn(use_agg_feats=use_agg_feats),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),  # if GPU then pin memory for perf
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
         batch_size=validation_batch_size,
-        collate_fn=get_collate_fn(
-            min_multiple=min_multiple, use_agg_feats=use_agg_feats
-        ),
+        collate_fn=get_collate_fn(use_agg_feats=use_agg_feats),
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )

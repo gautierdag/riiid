@@ -8,7 +8,6 @@ import h5py
 from scipy.stats import wasserstein_distance
 from utils import get_wd
 
-eps = 0.0000001
 DATA_FOLDER_PATH = "data"
 
 
@@ -66,29 +65,6 @@ def get_questions_lectures_tags():
             questions_lectures_tags,
         )
     return questions_lectures_tags
-
-
-def get_questions_lectures_bundles():
-    try:
-        questions_lectures_bundles = np.load(
-            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_bundles.npy"
-        )
-
-    except FileNotFoundError:
-        print("Generating Bundles Mapping")
-        questions_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/questions.csv")
-        lectures_df = pd.read_csv(f"{get_wd()}{DATA_FOLDER_PATH}/lectures.csv")
-        questions_lectures_bundles = np.concatenate(
-            [
-                questions_df["bundle_id"].values,
-                np.ones(len(lectures_df)) * questions_df["bundle_id"].max() + 1,
-            ]
-        ).astype(np.int)
-        np.save(
-            f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_bundles.npy",
-            questions_lectures_bundles,
-        )
-    return questions_lectures_bundles
 
 
 def get_lectures_mapping():
@@ -223,12 +199,20 @@ def get_questions_lectures_std_wass():
     return questions_lectures_wass, questions_lectures_std
 
 
+def get_questions_lectures_pct():
+    questions_lectures_pct = np.load(
+        f"{get_wd()}{DATA_FOLDER_PATH}/questions_lectures_pct.npy"
+    )
+    return questions_lectures_pct
+
+
+
 lectures_mapping = get_lectures_mapping()
 questions_lectures_parts = get_questions_lectures_parts()
 questions_lectures_tags = get_questions_lectures_tags()
-questions_lectures_bundles = get_questions_lectures_bundles()
 questions_lectures_mean = get_questions_lectures_mean()
 questions_lectures_wass, questions_lectures_std = get_questions_lectures_std_wass()
+questions_lectures_pct = get_questions_lectures_pct()
 
 
 def preprocess_df(df):
@@ -253,11 +237,6 @@ def preprocess_df(df):
         df["answered_correctly"] = df.content_type_id.map({False: 3, True: 4})
 
     return df
-
-
-def get_time_elapsed_from_timestamp(arr):
-    arr_seconds = np.diff(arr, prepend=0) / 1000
-    return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
 
 
 def generate_h5(df, file_name="feats.h5"):

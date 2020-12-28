@@ -41,7 +41,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_tags=189,  # number of different tags = 188 + 1 (for padding)
         n_correct=5,  # 0,1 (false, true), 2 (start token), 3 (padding), 4 (lecture)
         n_agg_feats=14,  # number of agg feats
-        n_exercise_feats=3,  # number of exercise feats
+        n_exercise_feats=4,  # number of exercise feats
         emb_dim=64,  # embedding dimension
         dropout=0.1,
         n_heads: int = 1,
@@ -61,6 +61,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.learning_rate = learning_rate
         self.lr_step_frequency = lr_step_frequency
         self.max_window_size = max_window_size
+        self.n_heads = n_heads
 
         self.use_prior_q_times = use_prior_q_times
         self.use_prior_q_explanation = use_prior_q_explanation
@@ -131,6 +132,32 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
         return mask
 
+    def generate_decoder_mask(self, timestamps):
+        """
+        Generate a decoder mask based on the original timestamps
+        The mask will prevent the attention mask from attending previous question
+        from same bundle
+        timestamps is shape (S, B)
+            S - sequence length
+            B - batch size
+        """
+        sz = timestamps.shape[0]
+        timestamps = timestamps.transpose(1, 0)  # switch to put batch first
+        # finding top right triangular mask
+        mask = (
+            (torch.triu(torch.ones(sz, sz, device=self.device)) == 0)
+            .transpose(0, 1)
+            .float()
+        )
+        # combine mask with bundle mask using timestamp
+        mask = (
+            mask
+            + ((timestamps.unsqueeze(1) - timestamps.unsqueeze(2)) == 0)
+            - torch.eye(sz, device=self.device)  # allow attending to self
+        )
+        mask = mask.masked_fill(mask > 0, float("-inf"))
+        return torch.cat(self.n_heads * [mask])
+
     def get_random_steps(self, lengths, max_steps=10):
         """
         for x return integer between 1 - 10 or
@@ -156,22 +183,10 @@ class RIIDDTransformerModel(pl.LightningModule):
         prior_q_times,
         agg_feats,
         e_feats,
+        raw_timestamps,
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
-
-        # if data is flat then expand to get Batch dim
-        if len(content_ids.shape) == 1:
-            content_ids = content_ids.unsqueeze(1)
-            parts = parts.unsqueeze(1)
-            answers = answers.unsqueeze(1)
-            tags = tags.unsqueeze(1)
-            timestamps = timestamps.unsqueeze(1)
-            prior_q_times = prior_q_times.unsqueeze(1)
-            if self.use_agg_feats:
-                agg_feats = agg_feats.unsqueeze(1)
-            if self.use_exercise_feats:
-                e_feats = e_feats.unsqueeze(1)
 
         # sequence that will go into encoder
         embeded_content = self.embed_content_id(content_ids)
@@ -224,12 +239,14 @@ class RIIDDTransformerModel(pl.LightningModule):
         top_right_attention_mask = self.generate_square_subsequent_mask(
             sequence_length
         ).type_as(embeded_exercises)
-
+        bundle_attention = self.generate_decoder_mask(raw_timestamps).type_as(
+            embeded_exercises
+        )
         output = self.transformer(
             embeded_exercises,
             embeded_responses,
-            tgt_mask=top_right_attention_mask,  # (S,S)
-            src_mask=top_right_attention_mask,  # (T,T)
+            tgt_mask=bundle_attention,  # (T,T)
+            src_mask=top_right_attention_mask,  # (S,S)
         )
 
         output = self.out_linear(output)
@@ -246,6 +263,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["prior_q_times"],
             batch["agg_feats"] if self.use_agg_feats else None,
             batch["e_feats"] if self.use_exercise_feats else None,
+            batch["raw_timestamps"],
         )
 
     @auto_move_data
@@ -295,44 +313,6 @@ class RIIDDTransformerModel(pl.LightningModule):
             preds[sequence_indexes, user_indexes],
             batch["row_ids"][sequence_indexes, user_indexes],
         )
-
-    @auto_move_data
-    def predict_fast_single_user(
-        self,
-        content_ids,
-        parts,
-        answers,
-        tags,
-        timestamps,
-        prior_q_times,
-        n=1,
-    ):
-        """
-        Predicts n steps for a single user in batch and return predictions
-        only for those steps (flattened)
-        """
-        length = len(content_ids)
-        out_predictions = torch.zeros(n, device=self.device)
-        for i in range(n, 0, -1):
-            preds = self(
-                content_ids,
-                parts,
-                answers,
-                tags,
-                timestamps,
-                prior_q_times,
-            )
-            out_predictions[n - i] = preds[length - i, 0]
-
-            # answers are shifted (start token) so need + 1
-            answer_idx = length - i + 1
-            # don't update if at end of answers
-            if answer_idx + 1 < len(answers):
-                # don't update if true is lecture
-                if answers[answer_idx] != 4:
-                    answers[answer_idx] = (preds[length - i, 0] > 0.5).long()
-
-        return out_predictions
 
     def training_step(self, batch, batch_nb):
         result = self.process_batch_step(batch)

@@ -35,7 +35,7 @@ def train(cfg) -> None:
     use_prior_q_times = cfg["use_prior_q_times"]
     val_step_frequency = cfg["val_step_frequency"]
     val_size = cfg["val_size"]
-    accumulate_grad_batches = cfg["accumulate_grad_batches"]
+    accumulate_grad_batches = 1
     use_agg_feats = cfg["use_agg_feats"]
     use_exercise_feats = cfg["use_exercise_feats"]
 
@@ -65,7 +65,7 @@ def train(cfg) -> None:
     )
 
     experiment_name = (
-        f"YOUNG_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
+        f"base_e{emb_dim}_h{n_heads}_d{dropout}_lr{learning_rate}"
         + f"_el{n_decoder_layers}_dl{n_decoder_layers}"
         + f"_f{dim_feedforward}_b{batch_size}_w{max_window_size}"
         + f"_lec_{use_lectures}_qtimes_{use_prior_q_times}_use_agg_{use_agg_feats}_use_ex{use_exercise_feats}"

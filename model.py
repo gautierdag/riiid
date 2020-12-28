@@ -277,7 +277,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         loss = F.binary_cross_entropy(
             result, batch["answered_correctly"], weight=batch["loss_mask"]
         )
-        self.log("train_loss", loss.cpu())
+        self.log("train_loss", loss)
         return loss
 
     def validate_n_steps(self, batch):
@@ -330,12 +330,12 @@ class RIIDDTransformerModel(pl.LightningModule):
         loss = F.binary_cross_entropy(
             result, batch["answered_correctly"], weight=batch["loss_mask"]
         )
-        self.log(f"{log_as}_loss_step", loss.cpu())
+        self.log(f"{log_as}_loss_step", loss)
 
         select_mask = batch["loss_mask"] > 0
         return (
-            torch.masked_select(result, select_mask).cpu(),
-            torch.masked_select(batch["answered_correctly"], select_mask).cpu(),
+            torch.masked_select(result, select_mask),
+            torch.masked_select(batch["answered_correctly"], select_mask),
         )
 
     def val_test_epoch_end(self, outputs, log_as="val"):

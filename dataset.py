@@ -94,11 +94,6 @@ def rolling_mean_over_time(timestamps, arr, time_step=two_hours):
     idxs[~start_idxs] = 0
     start_idxs = np.maximum.accumulate(idxs)
 
-    # different way of splitting using actual rolling time window (slower)
-    # start_idxs = np.argmax(
-    #     ((timestamps[..., None] - timestamps[None, ...]) < hour), axis=1
-    # )
-
     sums = arr.cumsum()
     sums = np.where(start_idxs == 0, sums, sums - sums[start_idxs - 1])
 
@@ -108,40 +103,18 @@ def rolling_mean_over_time(timestamps, arr, time_step=two_hours):
     return sums / counts
 
 
-def get_content_mean_feats(q_idx, content_ids, windows=[500, 1000, 2500]):
+def get_arr_mean_feats(q_idx, arr, windows=[]):
 
-    m_content_mean = np.zeros((len(content_ids), len(windows) + 1))
+    m_arr_mean = np.zeros((len(arr), len(windows) + 1))
 
     # content mean
-    m_content_mean[:, 0][q_idx] = questions_lectures_mean[content_ids][
-        q_idx
-    ].cumsum() / (np.arange(len(q_idx)) + 1)
+    m_arr_mean[:, 0][q_idx] = arr[q_idx].cumsum() / (np.arange(len(q_idx)) + 1)
 
     # calculate rolling mean for window sizes 500, 1k and 2.5k
     for i in range(1, len(windows) + 1):
-        m_content_mean[:, i][q_idx] = rolling_mean(
-            questions_lectures_mean[content_ids][q_idx], n=windows[i - 1]
-        )
+        m_arr_mean[:, i][q_idx] = rolling_mean([q_idx], n=windows[i - 1])
 
-    return m_content_mean
-
-
-def get_user_mean_feats(q_idx, answered_correctly, windows=[500, 1000, 2500]):
-
-    m_user_mean = np.zeros((len(answered_correctly), len(windows) + 1))
-
-    # user mean
-    m_user_mean[:, 0][q_idx] = answered_correctly[q_idx].cumsum() / (
-        np.arange(len(q_idx)) + 1
-    )
-
-    # calculate rolling mean for window sizes 500, 1k and 2.5k
-    for i in range(1, len(windows) + 1):
-        m_user_mean[:, i][q_idx] = rolling_mean(
-            answered_correctly[q_idx], n=windows[i - 1]
-        )
-
-    return m_user_mean
+    return m_arr_mean
 
 
 def get_parts_agg_feats(q_idx, parts, answered_correctly):
@@ -177,10 +150,8 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
     attempts = np.zeros(len(content_ids))
     attempts[q_idx] = cumcount(content_ids[q_idx]).clip(max=5, min=0) / 5
 
-    windows = [500]
-
     # content mean
-    m_content_mean = get_content_mean_feats(q_idx, content_ids, windows=windows)
+    m_content_mean = get_arr_mean_feats(q_idx, questions_lectures_mean[content_ids])
 
     # user session mean
     m_user_session_mean = np.zeros(len(timestamps))
@@ -191,7 +162,7 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
     m_user_session_mean[0] = 0
 
     # user mean
-    m_user_mean = get_user_mean_feats(q_idx, answered_correctly, windows=windows)
+    m_user_mean = get_arr_mean_feats(q_idx, answered_correctly)
 
     # prevent leak
     m_user_mean = np.roll(m_user_mean, 1, axis=0)
@@ -362,7 +333,6 @@ class RIIDDataset(Dataset):
             "answered_correctly": torch.from_numpy(answered_correctly).float(),
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
-            "raw_timestamps": torch.from_numpy(timestamps).long(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
@@ -395,7 +365,6 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
-            ("raw_timestamps", 0),
         ]
 
         if use_agg_feats:
@@ -468,9 +437,9 @@ def get_dataloaders(
     validation_batch_size=1024,
     max_window_size=100,
     use_lectures=True,
-    num_workers=0,
     use_agg_feats=True,
     use_e_feats=True,
+    num_workers=0,
 ):
 
     print("Reading pickle")

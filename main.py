@@ -35,7 +35,6 @@ def train(cfg) -> None:
     use_prior_q_times = cfg["use_prior_q_times"]
     val_step_frequency = cfg["val_step_frequency"]
     val_size = cfg["val_size"]
-    accumulate_grad_batches = 1
     use_agg_feats = cfg["use_agg_feats"]
     use_exercise_feats = cfg["use_exercise_feats"]
 
@@ -48,54 +47,52 @@ def train(cfg) -> None:
         use_agg_feats=use_agg_feats,
     )
 
-    for use_bundle_attention in [True, False]:
-        # Init our model
-        model = RIIDDTransformerModel(
-            learning_rate=learning_rate,
-            emb_dim=emb_dim,  # embedding dimension - this is for everything
-            dropout=dropout,
-            n_heads=n_heads,
-            n_encoder_layers=n_encoder_layers,
-            n_decoder_layers=n_decoder_layers,
-            dim_feedforward=dim_feedforward,
-            max_window_size=max_window_size,
-            use_prior_q_times=use_prior_q_times,
-            lr_step_frequency=val_step_frequency,
-            use_agg_feats=use_agg_feats,
-            use_exercise_feats=use_exercise_feats,
-            use_bundle_attention=use_bundle_attention,
-        )
+    # Init our model
+    model = RIIDDTransformerModel(
+        learning_rate=learning_rate,
+        emb_dim=emb_dim,  # embedding dimension - this is for everything
+        dropout=dropout,
+        n_heads=n_heads,
+        n_encoder_layers=n_encoder_layers,
+        n_decoder_layers=n_decoder_layers,
+        dim_feedforward=dim_feedforward,
+        max_window_size=max_window_size,
+        use_prior_q_times=use_prior_q_times,
+        lr_step_frequency=val_step_frequency,
+        use_agg_feats=use_agg_feats,
+        use_exercise_feats=use_exercise_feats,
+    )
 
-        experiment_name = f"use_bundle_attention_{use_bundle_attention}"
-        logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
+    experiment_name = f"RENAME_ME"
+    logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
-        # Initialize a trainer
-        trainer = pl.Trainer(
-            gpus=1,
-            max_epochs=5,
-            progress_bar_refresh_rate=1,
-            callbacks=[
-                EarlyStopping(monitor="avg_val_auc", patience=10, mode="max"),
-                ModelCheckpoint(
-                    monitor="avg_val_auc",
-                    filename="{epoch}-{val_loss_step:.2f}-{avg_val_auc:.2f}",
-                    mode="max",
-                ),
-                LearningRateMonitor(logging_interval="step"),
-            ],
-            logger=logger,
-            val_check_interval=val_step_frequency,  # check validation every validation_step
-            limit_val_batches=val_size,  # run through only 10% of val every time
-            max_steps=50000,
-        )
+    # Initialize a trainer
+    trainer = pl.Trainer(
+        gpus=1,
+        max_epochs=5,
+        progress_bar_refresh_rate=1,
+        callbacks=[
+            EarlyStopping(monitor="avg_val_auc", patience=10, mode="max"),
+            ModelCheckpoint(
+                monitor="avg_val_auc",
+                filename="{epoch}-{val_loss_step:.2f}-{avg_val_auc:.2f}",
+                mode="max",
+            ),
+            LearningRateMonitor(logging_interval="step"),
+        ],
+        logger=logger,
+        val_check_interval=val_step_frequency,  # check validation every validation_step
+        limit_val_batches=val_size,  # run through only 10% of val every time
+        max_steps=50000,
+    )
 
-        # Train the model ⚡
-        trainer.fit(
-            model, train_dataloader=train_loader, val_dataloaders=[val_loader],
-        )
+    # Train the model ⚡
+    trainer.fit(
+        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
+    )
 
     # Test on Final Full validation set
-    # trainer.test(test_dataloaders=[val_loader])
+    trainer.test(test_dataloaders=[val_loader])
 
 
 if __name__ == "__main__":

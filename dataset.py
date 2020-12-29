@@ -14,13 +14,10 @@ from preprocessing import (
     questions_lectures_wass,
     questions_lectures_pct,
     generate_h5,
-    DATA_FOLDER_PATH,
 )
 from utils import get_wd
 
-
-import math
-import torch.nn.functional as F
+from preprocessing import preprocess_df
 
 
 two_hours = 2 * 60 * 60 * 1000
@@ -208,6 +205,11 @@ class RIIDDataset(Dataset):
         window_size=100,
         use_agg_feats=True,
         use_e_feats=True,
+        content_ids=None,
+        answered_correctly=None,
+        timestamps=None,
+        prior_question_elapsed_time=None,
+        read_file=True,
     ):
         """
         Args:
@@ -218,12 +220,24 @@ class RIIDDataset(Dataset):
         """
         # np array where index maps to a user id
         self.user_mapping = user_mapping
-        self.user_history = user_history
+        self.user_history = user_history.astype(np.int16)
+        self.read_file = read_file
+        if not read_file and (content_ids is None):
+            raise ValueError(
+                "If not reading file, must pass in values for content_ids, answers, timestamps, and prior_question_elapsed"
+            )
+
+        self.content_ids = content_ids.astype(np.int16)
+        self.answered_correctly = answered_correctly.astype(np.int8)
+        self.timestamps = timestamps.astype(np.float32)
+        self.prior_question_elapsed_time = prior_question_elapsed_time.astype(
+            np.float32
+        )
+
         self.hdf5_file = f"{hdf5_file}"
         self.max_window_size = window_size
         self.use_agg_feats = use_agg_feats
         self.use_e_feats = use_e_feats
-        self.cache = {}
 
     def open_hdf5(self):
         # opens the h5py file
@@ -232,36 +246,57 @@ class RIIDDataset(Dataset):
     def __len__(self):
         return len(self.user_mapping)
 
-    def load_user_into_cache(self, user_id):
+    def get_user_raw(self, idx):
         """
-        add a user to self.cache
+        reads a user's series until that
         """
+        user_id = self.user_mapping[idx]
+        length = self.user_history[idx]
 
-        self.cache[user_id] = {
-            "content_ids": np.array(self.f[f"{user_id}/content_ids"], dtype=np.int64),
-            "answered_correctly": np.array(
+        if self.read_file:
+            if not hasattr(self, "f"):
+                self.open_hdf5()
+            content_ids = np.array(self.f[f"{user_id}/content_ids"], dtype=np.int64)
+            answered_correctly = np.array(
                 self.f[f"{user_id}/answered_correctly"], dtype=np.int64
-            ),
-            "timestamps": np.array(self.f[f"{user_id}/timestamps"], dtype=np.float32),
-            "prior_question_elapsed_time": np.array(
+            )
+            timestamps = np.array(self.f[f"{user_id}/timestamps"], dtype=np.float32)
+            prior_question_elapsed_time = np.array(
                 self.f[f"{user_id}/prior_question_elapsed_time"], dtype=np.float32
-            ),
-        }
+            )
+        else:
+            content_ids = self.content_ids[idx - length + 1 : idx + 1]
+            answered_correctly = self.answered_correctly[idx - length + 1 : idx + 1]
+            timestamps = self.timestamps[idx - length + 1 : idx + 1]
+            prior_question_elapsed_time = self.prior_question_elapsed_time[
+                idx - length + 1 : idx + 1
+            ]
+        return (
+            content_ids,
+            answered_correctly,
+            timestamps,
+            prior_question_elapsed_time,
+            length,
+        )
+
+    def load_all_all_into_cache(self, user_):
+        pass
 
     def __getitem__(self, idx):
 
         # open the hdf5 file in the iterator to allow multiple workers
         # https://github.com/pytorch/pytorch/issues/11929
-        if not hasattr(self, "f"):
-            self.open_hdf5()
 
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        user_id = self.user_mapping[idx]
-        length = self.user_history[idx]
-        # length = self.f[f"{user_id}/answered_correctly"].len()
-
+        (
+            content_ids,
+            answered_correctly,
+            timestamps,
+            prior_question_elapsed_time,
+            length,
+        ) = self.get_user_raw(idx)
         window_size = min(self.max_window_size, length)
 
         # index for loading larger than window size
@@ -270,18 +305,9 @@ class RIIDDataset(Dataset):
             # randomly select window size subset instead of trying to cram in everything
             start_index = length - window_size
 
-        if user_id not in self.cache:
-            self.load_user_into_cache(user_id)
-
-        content_ids = self.cache[user_id]["content_ids"][
-            : start_index + window_size
-        ].copy()
-        answered_correctly = self.cache[user_id]["answered_correctly"][
-            : start_index + window_size
-        ].copy()
-        timestamps = self.cache[user_id]["timestamps"][
-            : start_index + window_size
-        ].copy()
+        content_ids = content_ids[: start_index + window_size].copy()
+        answered_correctly = answered_correctly[: start_index + window_size].copy()
+        timestamps = timestamps[: start_index + window_size].copy()
 
         # get question parts
         parts = questions_lectures_parts[content_ids]
@@ -302,11 +328,20 @@ class RIIDDataset(Dataset):
         # select to proper length
         parts = parts[start_index:]
         content_ids = content_ids[start_index:]
+
+        # will replace first element of sequence with actual previous element
+        if start_index > 0:
+            start_token = answered_correctly[start_index - 1]
+        else:
+            # set start token if start_index is actually first element
+            start_token = 2
+
         answered_correctly = answered_correctly[start_index:]
+
         timestamps = timestamps[start_index:]
 
         # load in time stuff
-        prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
+        prior_q_times = prior_question_elapsed_time[
             start_index : start_index + window_size
         ].copy()
 
@@ -318,13 +353,7 @@ class RIIDDataset(Dataset):
 
         # shift by one the answered_correctly sequence
         answers = np.roll(answered_correctly, 1)
-
-        # set start token if start_index is actually first element
-        if start_index == 0:
-            answers[0] = 2
-        # else replace first element of sequence with actual previous element
-        else:
-            answers[0] = self.cache[user_id]["answered_correctly"][start_index - 1]
+        answers[0] = start_token
 
         return {
             "parts": torch.from_numpy(parts).long(),
@@ -352,7 +381,7 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
         """
 
         # collate lenghts into 1D tensor
-        items = {"length": torch.tensor([batch_item["length"] for batch_item in batch])}
+        items = {"length": torch.tensor([batch_item["length"] for batch_item in batch], dtype=torch.long)}
 
         # find shape that the batch will have
         num_items = len(batch)
@@ -399,7 +428,10 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
 
 
 def get_train_val_idxs(
-    df, validation_size=2500000, new_user_prob=0.25, use_lectures=True,
+    df,
+    validation_size=2500000,
+    new_user_prob=0.25,
+    use_lectures=True,
 ):
     # except FileNotFoundError:
     train_idxs = []
@@ -439,24 +471,33 @@ def get_dataloaders(
     use_lectures=True,
     use_agg_feats=True,
     use_e_feats=True,
+    read_file=False,
     num_workers=0,
 ):
 
     print("Reading pickle")
     df = pd.read_pickle(f"{get_wd()}riiid_train.pkl.gzip")
 
-    if not use_lectures:
-        print("Removing lectures")
-        df = df[~df.content_type_id]
-        h5_file_name = f"{get_wd()}feats_no_lec.h5"
+    if read_file:
+        if not use_lectures:
+            print("Removing lectures")
+            df = df[~df.content_type_id]
+            h5_file_name = f"{get_wd()}feats_no_lec.h5"
+        else:
+            h5_file_name = f"{get_wd()}feats.h5"
+        generate_h5(df, file_name=h5_file_name)
     else:
-        h5_file_name = f"{get_wd()}feats.h5"
-
-    generate_h5(df, file_name=h5_file_name)
+        print("Preprocessing df")
+        h5_file_name = ""
+        df = preprocess_df(df)
+        df.answered_correctly.replace(
+            -1, 4, inplace=True
+        )  # set lecture to token 4 for answered correctly
 
     print("Creating Dataset")
     user_mapping = df.user_id.values
     user_history = df.groupby("user_id").cumcount().values + 1
+
     dataset = RIIDDataset(
         user_mapping,
         user_history,
@@ -464,6 +505,11 @@ def get_dataloaders(
         window_size=max_window_size,
         use_agg_feats=use_agg_feats,
         use_e_feats=use_e_feats,
+        read_file=read_file,
+        content_ids=df.content_id.values,
+        answered_correctly=df.answered_correctly.values,
+        timestamps=df.timestamp.values,
+        prior_question_elapsed_time=df.prior_question_elapsed_time.values,
     )
     print(f"len(dataset): {len(dataset)}")
 

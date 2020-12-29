@@ -279,9 +279,6 @@ class RIIDDataset(Dataset):
             length,
         )
 
-    def load_all_all_into_cache(self, user_):
-        pass
-
     def __getitem__(self, idx):
 
         # open the hdf5 file in the iterator to allow multiple workers
@@ -381,7 +378,11 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
         """
 
         # collate lenghts into 1D tensor
-        items = {"length": torch.tensor([batch_item["length"] for batch_item in batch], dtype=torch.long)}
+        items = {
+            "length": torch.tensor(
+                [batch_item["length"] for batch_item in batch], dtype=torch.long
+            )
+        }
 
         # find shape that the batch will have
         num_items = len(batch)

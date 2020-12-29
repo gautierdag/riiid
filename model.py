@@ -5,7 +5,6 @@ from torch.nn import functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
-from typing import Optional
 
 
 def init_weights(m):
@@ -54,7 +53,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         use_prior_q_times=False,
         use_agg_feats=False,
         use_exercise_feats=False,
-        use_bundle_attention=False,
+        use_time_loss=False,
         lr_step_frequency=2000,
     ):
         super(RIIDDTransformerModel, self).__init__()
@@ -64,7 +63,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.max_window_size = max_window_size
         self.n_heads = n_heads
 
-        self.use_bundle_attention = use_bundle_attention
+        self.use_time_loss = use_time_loss
         self.use_prior_q_times = use_prior_q_times
         self.use_agg_feats = use_agg_feats
         self.use_exercise_feats = use_exercise_feats
@@ -118,6 +117,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
 
         self.out_linear = nn.Linear(emb_dim, 2)
+        if self.use_time_loss:
+            self.out_time_linear = nn.Linear(emb_dim, 1)
+
         init_weights(self)
 
     def get_random_steps(self, lengths, max_steps=10):
@@ -135,6 +137,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
         return torch.floor(m.sample()).long() + 1
 
+    def generate_square_subsequent_mask(self, sz):
+        return torch.tensor(float("-inf"), device=self.device).expand(sz, sz).triu(1)
+
     def forward(
         self,
         content_ids,
@@ -143,8 +148,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         tags,
         timestamps,
         prior_q_times,
-        agg_feats,
-        e_feats,
+        agg_feats=None,
+        e_feats=None,
+        **kwargs,
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
@@ -197,9 +203,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         embeded_exercises = embeded_exercises + embedded_positions[1:, :, :]
 
         # mask of shape S x S -> prevents attention looking forward
-        top_right_attention_mask = self.transformer.generate_square_subsequent_mask(
-            sequence_length
-        ).type_as(embeded_exercises)
+        top_right_attention_mask = self.generate_square_subsequent_mask(sequence_length)
 
         output = self.transformer(
             embeded_exercises,
@@ -208,21 +212,14 @@ class RIIDDTransformerModel(pl.LightningModule):
             src_mask=top_right_attention_mask,  # (S,S)
         )
 
-        output = self.out_linear(output)
-        return F.softmax(output, dim=2)[:, :, 1]
+        answer_output = self.out_linear(output)
 
-    def process_batch_step(self, batch):
-        # return result
-        return self(
-            batch["content_ids"],
-            batch["parts"],
-            batch["answers"],
-            batch["tags"],
-            batch["timestamps"],
-            batch["prior_q_times"],
-            batch["agg_feats"] if self.use_agg_feats else None,
-            batch["e_feats"] if self.use_exercise_feats else None,
-        )
+        time_output = None
+        if self.use_time_loss:
+            time_output = self.out_time_linear(output)
+            time_output = torch.sigmoid(time_output.squeeze(-1)[:-1, :])
+
+        return F.softmax(answer_output, dim=2)[:, :, 1], time_output
 
     @auto_move_data
     def predict_n_steps(self, batch, steps, return_all_preds=False):
@@ -240,7 +237,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         sequence_indexes = []
 
         for i in range(steps.max().int(), 0, -1):
-            preds = self.process_batch_step(batch)
+            preds, _ = self(**batch)
 
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
@@ -273,11 +270,19 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_nb):
-        result = self.process_batch_step(batch)
+        answer_preds, time_preds = self(**batch)
         loss = F.binary_cross_entropy(
-            result, batch["answered_correctly"], weight=batch["loss_mask"]
+            answer_preds, batch["answered_correctly"], weight=batch["loss_mask"]
         )
-        self.log("train_loss", loss)
+        self.log("train_loss", loss.item(), on_epoch=False, on_step=True)
+        if time_preds is not None:
+            time_loss = F.smooth_l1_loss(
+                time_preds * batch["loss_mask"][:-1, :],
+                batch["prior_q_times"][1:] * batch["loss_mask"][:-1, :],
+                reduction="mean",
+            )
+            self.log("train_time_loss", loss.item(), on_epoch=False, on_step=True)
+            loss = loss + time_loss
         return loss
 
     def validate_n_steps(self, batch):
@@ -294,7 +299,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         user_indexes = []
         sequence_indexes = []
         for i in range(steps.max().int(), 0, -1):
-            preds = self.process_batch_step(batch)
+            preds, _ = self(**batch)
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
 
@@ -330,7 +335,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         loss = F.binary_cross_entropy(
             result, batch["answered_correctly"], weight=batch["loss_mask"]
         )
-        self.log(f"{log_as}_loss_step", loss)
+        self.log(f"{log_as}_loss_step", loss.item(), on_epoch=True, on_step=False)
 
         select_mask = batch["loss_mask"] > 0
         return (
@@ -343,9 +348,10 @@ class RIIDDTransformerModel(pl.LightningModule):
         y = torch.cat([out[1] for out in outputs], dim=0)
         auc = auroc(y_pred, y)
         if log_as == "val":
-            self.log(f"avg_{log_as}_auc", auc, prog_bar=True)
+            self.log(f"avg_{log_as}_auc", auc)
         else:
             self.log(f"avg_{log_as}_auc", auc)
+        del outputs
 
     def validation_step(self, batch, batch_nb, dataset_nb=None):
         return self.val_test_step(batch, log_as="val")
@@ -366,8 +372,7 @@ class RIIDDTransformerModel(pl.LightningModule):
                 optimizer, mode="max", patience=2, factor=0.5
             ),
             "monitor": "avg_val_auc",
-            "interval": "step",
-            "frequency": self.lr_step_frequency,
+            "interval": "epoch",
             "strict": True,
         }
 

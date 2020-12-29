@@ -14,13 +14,10 @@ from preprocessing import (
     questions_lectures_wass,
     questions_lectures_pct,
     generate_h5,
-    DATA_FOLDER_PATH,
 )
 from utils import get_wd
 
-
-import math
-import torch.nn.functional as F
+import sys
 
 
 two_hours = 2 * 60 * 60 * 1000
@@ -103,18 +100,9 @@ def rolling_mean_over_time(timestamps, arr, time_step=two_hours):
     return sums / counts
 
 
-def get_arr_mean_feats(q_idx, arr, windows=[]):
-
-    m_arr_mean = np.zeros((len(arr), len(windows) + 1))
-
+def get_arr_mean_feats(q_idx, arr):
     # content mean
-    m_arr_mean[:, 0][q_idx] = arr[q_idx].cumsum() / (np.arange(len(q_idx)) + 1)
-
-    # calculate rolling mean for window sizes 500, 1k and 2.5k
-    for i in range(1, len(windows) + 1):
-        m_arr_mean[:, i][q_idx] = rolling_mean([q_idx], n=windows[i - 1])
-
-    return m_arr_mean
+    return arr[q_idx].cumsum() / (np.arange(len(q_idx)) + 1)
 
 
 def get_parts_agg_feats(q_idx, parts, answered_correctly):
@@ -165,7 +153,7 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
     m_user_mean = get_arr_mean_feats(q_idx, answered_correctly)
 
     # prevent leak
-    m_user_mean = np.roll(m_user_mean, 1, axis=0)
+    m_user_mean = np.roll(m_user_mean, 1)
     m_user_mean[0] = 0
 
     # part mean
@@ -178,8 +166,8 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
     return np.concatenate(
         [
             attempts[..., np.newaxis],
-            m_content_mean,
-            m_user_mean,
+            m_content_mean[..., np.newaxis],
+            m_user_mean[..., np.newaxis],
             parts_mean,
             m_user_session_mean[..., np.newaxis],
             session_number[..., np.newaxis],
@@ -223,6 +211,7 @@ class RIIDDataset(Dataset):
         self.max_window_size = window_size
         self.use_agg_feats = use_agg_feats
         self.use_e_feats = use_e_feats
+        self.max_user_cached = 100000
         self.cache = {}
 
     def open_hdf5(self):
@@ -236,11 +225,10 @@ class RIIDDataset(Dataset):
         """
         add a user to self.cache
         """
-
         self.cache[user_id] = {
-            "content_ids": np.array(self.f[f"{user_id}/content_ids"], dtype=np.int64),
+            "content_ids": np.array(self.f[f"{user_id}/content_ids"], dtype=np.int16),
             "answered_correctly": np.array(
-                self.f[f"{user_id}/answered_correctly"], dtype=np.int64
+                self.f[f"{user_id}/answered_correctly"], dtype=np.int8
             ),
             "timestamps": np.array(self.f[f"{user_id}/timestamps"], dtype=np.float32),
             "prior_question_elapsed_time": np.array(
@@ -273,15 +261,11 @@ class RIIDDataset(Dataset):
         if user_id not in self.cache:
             self.load_user_into_cache(user_id)
 
-        content_ids = self.cache[user_id]["content_ids"][
-            : start_index + window_size
-        ].copy()
+        content_ids = self.cache[user_id]["content_ids"][: start_index + window_size]
         answered_correctly = self.cache[user_id]["answered_correctly"][
             : start_index + window_size
-        ].copy()
-        timestamps = self.cache[user_id]["timestamps"][
-            : start_index + window_size
-        ].copy()
+        ]
+        timestamps = self.cache[user_id]["timestamps"][: start_index + window_size]
 
         # get question parts
         parts = questions_lectures_parts[content_ids]
@@ -308,7 +292,7 @@ class RIIDDataset(Dataset):
         # load in time stuff
         prior_q_times = self.cache[user_id]["prior_question_elapsed_time"][
             start_index : start_index + window_size
-        ].copy()
+        ]
 
         # convert timestamps to time elapsed
         time_elapsed_timestamps = get_time_elapsed_from_timestamp(timestamps)
@@ -366,7 +350,6 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
             ("tags", 188),
             ("prior_q_times", 0),
         ]
-
         if use_agg_feats:
             PADDING_LIST.append(("agg_feats", 0))
         if use_e_feats:
@@ -483,16 +466,14 @@ def get_dataloaders(
         shuffle=True,
         collate_fn=get_collate_fn(use_agg_feats=use_agg_feats, use_e_feats=use_e_feats),
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),  # if GPU then pin memory for perf
+        pin_memory=True,  # if GPU then pin memory for perf
     )
     val_loader = DataLoader(
         dataset=Subset(dataset, q_valid_indices),
         batch_size=validation_batch_size,
         collate_fn=get_collate_fn(use_agg_feats=use_agg_feats, use_e_feats=use_e_feats),
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=True,
     )
-
-    del df
 
     return train_loader, val_loader

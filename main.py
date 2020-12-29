@@ -83,7 +83,6 @@ def train(cfg) -> None:
         logger=logger,
         val_check_interval=val_step_frequency,  # check validation every validation_step
         limit_val_batches=val_size,  # run through only 10% of val every time
-        max_steps=50000,
     )
 
     # Train the model ⚡

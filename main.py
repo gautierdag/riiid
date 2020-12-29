@@ -87,7 +87,6 @@ def train(cfg) -> None:
             logger=logger,
             limit_train_batches=val_step_frequency,  # check validation every validation_step
             limit_val_batches=val_size,  # run through only 10% of val every time
-            flush_logs_every_n_steps=50,
         )
 
         # Train the model ⚡

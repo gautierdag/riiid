@@ -133,6 +133,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
         return torch.floor(m.sample()).long() + 1
 
+    def generate_square_subsequent_mask(self, sz):
+        return torch.tensor(float("-inf"), device=self.device).expand(sz, sz).triu(1)
+
     def forward(
         self,
         content_ids,
@@ -195,9 +198,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         embeded_exercises = embeded_exercises + embedded_positions[1:, :, :]
 
         # mask of shape S x S -> prevents attention looking forward
-        top_right_attention_mask = self.transformer.generate_square_subsequent_mask(
+        top_right_attention_mask = self.generate_square_subsequent_mask(
             sequence_length
-        ).type_as(embeded_exercises)
+        )
 
         output = self.transformer(
             embeded_exercises,
@@ -364,8 +367,7 @@ class RIIDDTransformerModel(pl.LightningModule):
                 optimizer, mode="max", patience=2, factor=0.5
             ),
             "monitor": "avg_val_auc",
-            "interval": "step",
-            "frequency": self.lr_step_frequency,
+            "interval": "epoch",
             "strict": True,
         }
 

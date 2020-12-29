@@ -63,13 +63,13 @@ def train(cfg) -> None:
         use_exercise_feats=use_exercise_feats,
     )
 
-    experiment_name = f"RENAME_ME"
+    experiment_name = f"ALL_YOUR_BASES_BELONG_TO_US"
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
     # Initialize a trainer
     trainer = pl.Trainer(
         gpus=1,
-        max_epochs=5,
+        max_epochs=1000,
         progress_bar_refresh_rate=1,
         callbacks=[
             EarlyStopping(monitor="avg_val_auc", patience=10, mode="max"),
@@ -78,16 +78,18 @@ def train(cfg) -> None:
                 filename="{epoch}-{val_loss_step:.2f}-{avg_val_auc:.2f}",
                 mode="max",
             ),
-            LearningRateMonitor(logging_interval="step"),
+            LearningRateMonitor(logging_interval="epoch"),
         ],
         logger=logger,
-        val_check_interval=val_step_frequency,  # check validation every validation_step
+        limit_train_batches=val_step_frequency,  # check validation every epoch
         limit_val_batches=val_size,  # run through only 10% of val every time
     )
 
     # Train the model ⚡
     trainer.fit(
-        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
+        model,
+        train_dataloader=train_loader,
+        val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set

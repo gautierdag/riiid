@@ -24,13 +24,6 @@ two_hours = 2 * 60 * 60 * 1000
 eps = 0.0000001
 
 
-# def ffill(arr):
-#     mask = np.where(arr == 0, True, False)
-#     idx = np.where(~mask, np.arange(mask.shape[0]), 0)
-#     np.maximum.accumulate(idx, axis=0, out=idx)
-#     return arr[idx]
-
-
 def get_time_elapsed_from_timestamp(arr):
     arr_seconds = np.diff(arr, prepend=0) / 1000
     return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
@@ -132,31 +125,11 @@ def get_parts_agg_feats(q_idx, parts, answered_correctly):
     parts_aggs[q_idx] = answered_correctly_parts.cumsum(axis=0) / ((count_parts + 1))
     return parts_aggs
 
-
 def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
 
-    # Calculate agg feats
+    # Calculate mean agg feats
     # question idx
     q_idx = np.where(answered_correctly != 4)[0]
-
-    # get session number
-    session_splits = np.insert(np.where(np.diff(timestamps) > (two_hours), 1, 0), 0, 0)
-    session_number = ((np.cumsum(session_splits) // 10) / 10).clip(max=1, min=0)
-
-    # attempts of question id
-    attempts = np.zeros(len(content_ids))
-    attempts[q_idx] = cumcount(content_ids[q_idx]).clip(max=5, min=0) / 5
-
-    # content mean
-    m_content_mean = get_arr_mean_feats(q_idx, questions_lectures_mean[content_ids])
-
-    # user session mean
-    m_user_session_mean = np.zeros(len(timestamps))
-    m_user_session_mean[q_idx] = rolling_mean_over_time(
-        timestamps[q_idx], answered_correctly[q_idx], time_step=two_hours
-    )
-    m_user_session_mean = np.roll(m_user_session_mean, 1)
-    m_user_session_mean[0] = 0
 
     # user mean
     m_user_mean = get_arr_mean_feats(q_idx, answered_correctly)
@@ -174,12 +147,8 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
 
     return np.concatenate(
         [
-            attempts[..., np.newaxis],
-            m_content_mean,
             m_user_mean,
-            parts_mean,
-            m_user_session_mean[..., np.newaxis],
-            session_number[..., np.newaxis],
+            parts_mean
         ],
         axis=1,
     )
@@ -309,6 +278,13 @@ class RIIDDataset(Dataset):
         # get question parts
         parts = questions_lectures_parts[content_ids]
 
+        # attempts of question id
+        attempts = np.ones(len(content_ids)) * 5
+        q_idx = np.where(answered_correctly != 4)[0]
+        attempts[q_idx] = cumcount(content_ids[q_idx]).clip(max=4, min=0)
+        attempts = attempts.astype(np.int8)
+        attempts = attempts[start_index:]
+
         agg_feats = None
         if self.use_agg_feats:
             agg_feats = get_agg_feats(
@@ -360,6 +336,7 @@ class RIIDDataset(Dataset):
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
+            "attempts": torch.from_numpy(attempts).long(),
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
             else agg_feats,
@@ -395,6 +372,7 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
+            ("attempts", 5),
         ]
 
         if use_agg_feats:

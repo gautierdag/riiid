@@ -63,7 +63,7 @@ def train(cfg) -> None:
         use_exercise_feats=use_exercise_feats,
     )
 
-    experiment_name = f"ALL_YOUR_BASES_BELONG_TO_US"
+    experiment_name = f"categorical_attempts_lean_mean_aggs"
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
     # Initialize a trainer

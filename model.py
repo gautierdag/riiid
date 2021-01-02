@@ -1,36 +1,16 @@
-import math
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.core.decorators import auto_move_data
 from pytorch_lightning.metrics.functional.classification import auroc
-from typing import Optional
+from transformer import TransformerEncDec
 
 
 def init_weights(m):
     if type(m) == nn.Linear:
         torch.nn.init.xavier_uniform_(m.weight)
         torch.nn.init.zeros_(m.bias)
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=1000):
-        super(PositionalEncoding, self).__init__()
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer("pe", pe)
-
-    def forward(self, sequence_length):
-        # returns embeds (sequence_length, 1, d_model)
-        return self.pe[:sequence_length, :]
 
 
 class RIIDDTransformerModel(pl.LightningModule):
@@ -51,17 +31,21 @@ class RIIDDTransformerModel(pl.LightningModule):
         dim_feedforward: int = 256,
         activation: str = "relu",
         max_window_size=100,
+        start_window_size=10,
         use_prior_q_times=False,
         use_agg_feats=False,
         use_exercise_feats=False,
         lr_step_frequency=2000,
+        transformer_type="base",
     ):
         super(RIIDDTransformerModel, self).__init__()
         self.model_type = "RiiidTransformer"
         self.learning_rate = learning_rate
         self.lr_step_frequency = lr_step_frequency
         self.max_window_size = max_window_size
+        self.window_size = start_window_size
         self.n_heads = n_heads
+        self.transformer_type = transformer_type
 
         self.use_prior_q_times = use_prior_q_times
         self.use_agg_feats = use_agg_feats
@@ -103,10 +87,9 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.response_weights = nn.Parameter(torch.tensor(r_w), requires_grad=True)
         self.register_parameter("response_weights", self.response_weights)  ###
 
-        # Transformer component
-        self.pos_encoder = PositionalEncoding(emb_dim)
-        self.transformer = nn.Transformer(
+        self.transformer = TransformerEncDec(
             d_model=emb_dim,
+            transformer_type=transformer_type,
             nhead=n_heads,
             num_encoder_layers=n_encoder_layers,
             num_decoder_layers=n_decoder_layers,
@@ -114,7 +97,6 @@ class RIIDDTransformerModel(pl.LightningModule):
             dim_feedforward=dim_feedforward,
             activation=activation,
         )
-
         self.out_linear = nn.Linear(emb_dim, 2)
         init_weights(self)
 
@@ -133,8 +115,55 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
         return torch.floor(m.sample()).long() + 1
 
-    def generate_square_subsequent_mask(self, sz):
-        return torch.tensor(float("-inf"), device=self.device).expand(sz, sz).triu(1)
+    def select_last_window_subset(
+        self, lengths, window_size=100,
+    ):
+        """
+        Returns the idxs for the last window_size subset of lengths
+        Inputs:
+            lengths (Long Tensor, [batch_dim]): the length at which each sequence ends for each element in batch
+            window_size (int): the length from which to select
+        Returns:
+            idxs (Tensor, [window_size, batch_dim, 1])
+        """
+        sequence_length = lengths.max()
+        batch_dim = len(lengths)
+
+        if window_size > sequence_length:
+            window_size = sequence_length
+
+        # gather_idxs should be of size (window_size, batch_dim, 1)
+        gather_idxs = (
+            torch.arange(window_size, device=self.device)
+            .expand(1, window_size)
+            .transpose(1, 0)
+            .unsqueeze(1)
+            .repeat(1, batch_dim, 1)
+        )
+
+        # select lengths > window_size - where the indexes will be funky
+        # namely where the new indexes won't start at 0
+        outside_start_window = torch.where(lengths > window_size)[0]
+        if len(outside_start_window) > 0:
+            possible_idxs = torch.arange(sequence_length, device=self.device).expand(
+                len(outside_start_window), sequence_length
+            )
+            # select the correct indexes for sequence_elements of length > window_size
+            outside_start_window_idxs = torch.nonzero(
+                (
+                    (possible_idxs < lengths[outside_start_window].unsqueeze(1))
+                    & (
+                        possible_idxs
+                        >= lengths[outside_start_window].unsqueeze(1) - window_size
+                    )
+                )
+            )[:, 1].reshape(len(outside_start_window), window_size)
+            outside_start_window_idxs = outside_start_window_idxs.transpose(
+                1, 0
+            ).unsqueeze(2)
+            gather_idxs[:, outside_start_window, :] = outside_start_window_idxs
+
+        return gather_idxs
 
     def forward(
         self,
@@ -144,8 +173,10 @@ class RIIDDTransformerModel(pl.LightningModule):
         tags,
         timestamps,
         prior_q_times,
-        agg_feats,
-        e_feats,
+        last_window_subset_idxs,
+        agg_feats=None,
+        e_feats=None,
+        **kwargs,
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
@@ -190,40 +221,16 @@ class RIIDDTransformerModel(pl.LightningModule):
             torch.stack(response_sequence_components, dim=3) * r_w
         ).sum(dim=3)
 
-        # adding positional vector
-        sequence_length = embeded_responses.shape[0]
-        embedded_positions = self.pos_encoder(sequence_length + 1)
-        # add shifted position embedding ( start token is first position)
-        embeded_responses = embeded_responses + embedded_positions[:-1, :, :]
-        embeded_exercises = embeded_exercises + embedded_positions[1:, :, :]
-
-        # mask of shape S x S -> prevents attention looking forward
-        top_right_attention_mask = self.generate_square_subsequent_mask(
-            sequence_length
+        shorter_embeded_exercises = embeded_exercises.gather(
+            0, last_window_subset_idxs.repeat(1, 1, embeded_exercises.shape[2])
+        )
+        shorter_embeded_responses = embeded_responses.gather(
+            0, last_window_subset_idxs.repeat(1, 1, embeded_responses.shape[2])
         )
 
-        output = self.transformer(
-            embeded_exercises,
-            embeded_responses,
-            tgt_mask=top_right_attention_mask,  # (T,T)
-            src_mask=top_right_attention_mask,  # (S,S)
-        )
-
+        output = self.transformer(shorter_embeded_exercises, shorter_embeded_responses)
         output = self.out_linear(output)
         return F.softmax(output, dim=2)[:, :, 1]
-
-    def process_batch_step(self, batch):
-        # return result
-        return self(
-            batch["content_ids"],
-            batch["parts"],
-            batch["answers"],
-            batch["tags"],
-            batch["timestamps"],
-            batch["prior_q_times"],
-            batch["agg_feats"] if self.use_agg_feats else None,
-            batch["e_feats"] if self.use_exercise_feats else None,
-        )
 
     @auto_move_data
     def predict_n_steps(self, batch, steps, return_all_preds=False):
@@ -241,7 +248,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         sequence_indexes = []
 
         for i in range(steps.max().int(), 0, -1):
-            preds = self.process_batch_step(batch)
+            preds = self(**batch)
 
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
@@ -274,14 +281,35 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_nb):
-        result = self.process_batch_step(batch)
-        loss = F.binary_cross_entropy(
-            result, batch["answered_correctly"], weight=batch["loss_mask"]
+        # select the window size appropriate for transformer from larger sequence
+
+        last_window_subset_idxs = self.select_last_window_subset(
+            batch["length"], window_size=self.window_size
         )
+
+        result = self(**batch, last_window_subset_idxs=last_window_subset_idxs)
+
+        answers = batch["answered_correctly"].gather(
+            0, last_window_subset_idxs.squeeze(2)
+        )
+        loss_mask = batch["loss_mask"].gather(0, last_window_subset_idxs.squeeze(2))
+
+        loss = F.binary_cross_entropy(result, answers, weight=loss_mask)
         self.log("train_loss", loss.cpu())
+
+        # update window size during training
+        if (
+            self.global_step % 500 == 0
+            and self.global_step != 0
+            and self.window_size < self.max_window_size
+        ):
+            self.window_size += 1
+
+        self.log("window_size", self.window_size)
+
         return loss
 
-    def validate_n_steps(self, batch):
+    def validate_n_steps(self, batch, last_window_subset_idxs):
         """
         Predicts max_steps steps for all items in batch and return predictions
         only for those steps (flattened)
@@ -291,24 +319,31 @@ class RIIDDTransformerModel(pl.LightningModule):
         seq_length = batch["answers"].shape[0]
         lengths = batch["length"]
         steps = batch["steps"]
+        prediction_window_size = last_window_subset_idxs.shape[0]
         users = torch.arange(n_users)
         user_indexes = []
         sequence_indexes = []
         for i in range(steps.max().int(), 0, -1):
-            preds = self.process_batch_step(batch)
+            preds = self(**batch, last_window_subset_idxs=last_window_subset_idxs)
             sequence_indexes_at_i = lengths[steps >= i] - i
+            preds_shifted_sequence_indexes_at_i = sequence_indexes_at_i - (
+                lengths[steps >= i] - prediction_window_size
+            ).clamp(min=0)
             user_indexes_at_i = users[steps >= i]
 
             # get index for which to update the answers
             # since answers is shifted we want to map preds 0..98 -> answers 1:99
-            answers_idx = torch.where(sequence_indexes_at_i + 1 != seq_length)
+            answers_idx = torch.where(sequence_indexes_at_i + 1 != seq_length)[0]
             a_seq_idx = sequence_indexes_at_i[answers_idx] + 1
             u_seq_idx = user_indexes_at_i[answers_idx]
 
             # set answer to either 0 or 1 if not lecture
             batch["answers"][a_seq_idx, u_seq_idx] = torch.where(
                 batch["answers"][a_seq_idx, u_seq_idx] != 4,
-                (preds[sequence_indexes_at_i[answers_idx], u_seq_idx] > 0.5).long(),
+                (
+                    preds[preds_shifted_sequence_indexes_at_i[answers_idx], u_seq_idx]
+                    > 0.5
+                ).long(),
                 batch["answers"][a_seq_idx, u_seq_idx],
             )
 
@@ -321,22 +356,31 @@ class RIIDDTransformerModel(pl.LightningModule):
 
     def val_test_step(self, batch, log_as="val"):
         batch["steps"] = self.get_random_steps(batch["length"], max_steps=10)
-        result, sequence_indexes, user_indexes = self.validate_n_steps(batch)
+        # evaluate on max window size
+        last_window_subset_idxs = self.select_last_window_subset(
+            batch["length"], window_size=self.max_window_size
+        )
+        answers = batch["answered_correctly"].gather(
+            0, last_window_subset_idxs.squeeze(2)
+        )
+        loss_mask = batch["loss_mask"].gather(0, last_window_subset_idxs.squeeze(2))
 
+        result, sequence_indexes, user_indexes = self.validate_n_steps(
+            batch, last_window_subset_idxs
+        )
         step_mask = torch.zeros(batch["loss_mask"].shape, device=self.device)
         step_mask[sequence_indexes, user_indexes] = 1
+        step_mask = step_mask.gather(0, last_window_subset_idxs.squeeze(2))
 
-        batch["loss_mask"] *= step_mask
+        loss_mask *= step_mask
 
-        loss = F.binary_cross_entropy(
-            result, batch["answered_correctly"], weight=batch["loss_mask"]
-        )
+        loss = F.binary_cross_entropy(result, answers, weight=loss_mask)
         self.log(f"{log_as}_loss_step", loss.cpu())
 
-        select_mask = batch["loss_mask"] > 0
+        select_mask = loss_mask > 0
         return (
             torch.masked_select(result, select_mask).cpu(),
-            torch.masked_select(batch["answered_correctly"], select_mask).cpu(),
+            torch.masked_select(answers, select_mask).cpu(),
         )
 
     def val_test_epoch_end(self, outputs, log_as="val"):

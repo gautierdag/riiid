@@ -24,13 +24,6 @@ two_hours = 2 * 60 * 60 * 1000
 eps = 0.0000001
 
 
-# def ffill(arr):
-#     mask = np.where(arr == 0, True, False)
-#     idx = np.where(~mask, np.arange(mask.shape[0]), 0)
-#     np.maximum.accumulate(idx, axis=0, out=idx)
-#     return arr[idx]
-
-
 def get_time_elapsed_from_timestamp(arr):
     arr_seconds = np.diff(arr, prepend=0) / 1000
     return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
@@ -294,6 +287,7 @@ class RIIDDataset(Dataset):
             prior_question_elapsed_time,
             length,
         ) = self.get_user_raw(idx)
+
         window_size = min(self.max_window_size, length)
 
         # index for loading larger than window size
@@ -429,10 +423,7 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
 
 
 def get_train_val_idxs(
-    df,
-    validation_size=2500000,
-    new_user_prob=0.25,
-    use_lectures=True,
+    df, validation_size=2500000, new_user_prob=0.25, use_lectures=True,
 ):
     # except FileNotFoundError:
     train_idxs = []

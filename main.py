@@ -63,7 +63,7 @@ def train(cfg) -> None:
         use_exercise_feats=use_exercise_feats,
     )
 
-    experiment_name = f"ALL_YOUR_BASES_BELONG_TO_US"
+    experiment_name = f"dynamic_window_size"
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
     # Initialize a trainer
@@ -87,13 +87,11 @@ def train(cfg) -> None:
 
     # Train the model ⚡
     trainer.fit(
-        model,
-        train_dataloader=train_loader,
-        val_dataloaders=[val_loader],
+        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set
-    trainer.test(test_dataloaders=[val_loader])
+    # trainer.test(test_dataloaders=[val_loader])
 
 
 if __name__ == "__main__":

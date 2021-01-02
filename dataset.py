@@ -23,14 +23,6 @@ from preprocessing import preprocess_df
 two_hours = 2 * 60 * 60 * 1000
 eps = 0.0000001
 
-
-# def ffill(arr):
-#     mask = np.where(arr == 0, True, False)
-#     idx = np.where(~mask, np.arange(mask.shape[0]), 0)
-#     np.maximum.accumulate(idx, axis=0, out=idx)
-#     return arr[idx]
-
-
 def get_time_elapsed_from_timestamp(arr):
     arr_seconds = np.diff(arr, prepend=0) / 1000
     return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
@@ -132,6 +124,80 @@ def get_parts_agg_feats(q_idx, parts, answered_correctly):
     parts_aggs[q_idx] = answered_correctly_parts.cumsum(axis=0) / ((count_parts + 1))
     return parts_aggs
 
+def rolling_mean(q_idx, arr, window_size):
+    cum_diff = np.cumsum(arr[q_idx])
+    rolled = np.roll(cum_diff, window_size)
+    rolled[:window_size] = 0
+    cum_diff = cum_diff - rolled
+    
+    # Prevent leak
+    agg = np.roll(cum_diff / (np.arange(len(arr[q_idx]),)+1), 1)
+    agg[0] = 0
+    
+    return agg
+
+def ffill2(arr):
+    mask = np.where(arr<0, True, False)
+    idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    out = arr[np.arange(idx.shape[0])[:,None], idx]
+    return out
+
+def get_session_mean(q_idx, ts, answered_correctly):
+    if len(ts)<=1:
+        return np.array([0])
+
+    ts = ts[q_idx]
+    answered_correctly = answered_correctly[q_idx]
+
+    all_counts = np.arange(len(ts)) + 1
+    
+    ans_cum = np.cumsum(answered_correctly)
+    ans_idxs = np.ones(len(answered_correctly),) * -1
+    
+    session_start = np.where(np.diff(ts, prepend=0)>(8*60*60*1000))
+    session_start_shifted = np.roll(session_start, 1)[0]
+    weird_case = False
+    if not len(session_start_shifted):
+        session_start_shifted = np.array([0])
+        weird_case = True
+    else:
+        session_start_shifted[0] = 0
+
+    session_end = session_start[0] - 1
+    ## add current session if we are in mid session
+    if not weird_case:
+        if session_start[0][-1] != len(ts)-1:
+            session_start_shifted = np.append(session_start_shifted, session_start[0][-1])
+            session_end = np.append(session_end, len(ts)-1)
+    ## aggs
+    
+    ans_idxs[session_end] = 1
+    ans_cum = ans_idxs * ans_cum
+    ans_cum = ffill2(np.array([ans_cum]))[0]
+    
+    session_cum = np.cumsum(answered_correctly) - ans_cum
+    
+    session_counts = 1 + session_end - session_start_shifted
+    session_cumsum = np.cumsum(session_counts)
+    #session_lengths = ts[session_end] - ts[session_start_shifted]
+
+    counts = np.ones((len(ts),)) * -1
+#     lengths = np.ones((len(ts),)) * -1
+
+    counts[session_end] = session_cumsum - 1 
+    #lengths[session_end] = session_lengths
+
+    counts[0] = 0
+    #lengths[0] = 0
+    
+    counts = ffill2(np.array([counts]))[0]
+    counts = all_counts - counts
+    
+    to_return = np.roll(session_cum / counts, 1)
+    to_return = np.where(counts==1, 0, to_return)
+    
+    return to_return
 
 def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
 
@@ -139,24 +205,12 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
     # question idx
     q_idx = np.where(answered_correctly != 4)[0]
 
-    # get session number
-    session_splits = np.insert(np.where(np.diff(timestamps) > (two_hours), 1, 0), 0, 0)
-    session_number = ((np.cumsum(session_splits) // 10) / 10).clip(max=1, min=0)
-
     # attempts of question id
     attempts = np.zeros(len(content_ids))
     attempts[q_idx] = cumcount(content_ids[q_idx]).clip(max=5, min=0) / 5
 
     # content mean
     m_content_mean = get_arr_mean_feats(q_idx, questions_lectures_mean[content_ids])
-
-    # user session mean
-    m_user_session_mean = np.zeros(len(timestamps))
-    m_user_session_mean[q_idx] = rolling_mean_over_time(
-        timestamps[q_idx], answered_correctly[q_idx], time_step=two_hours
-    )
-    m_user_session_mean = np.roll(m_user_session_mean, 1)
-    m_user_session_mean[0] = 0
 
     # user mean
     m_user_mean = get_arr_mean_feats(q_idx, answered_correctly)
@@ -172,17 +226,33 @@ def get_agg_feats(content_ids, answered_correctly, parts, timestamps):
     parts_mean = np.roll(parts_mean, 1, axis=0)
     parts_mean[0] = 0
 
+    # session mean
+    session_mean = np.zeros(len(timestamps))
+    session_mean[q_idx] = get_session_mean(q_idx, timestamps, answered_correctly)
+
     return np.concatenate(
         [
             attempts[..., np.newaxis],
             m_content_mean,
             m_user_mean,
             parts_mean,
-            m_user_session_mean[..., np.newaxis],
-            session_number[..., np.newaxis],
+            session_mean[..., np.newaxis],
         ],
         axis=1,
     )
+
+def ffill(arr):
+    mask = np.where(arr==0, True, False)
+    idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    out = arr[np.arange(idx.shape[0])[:,None], idx]
+    return out
+
+def t_since_last_session(ts):
+    s_split = np.insert(np.where(np.diff(ts)>(8*60*60*1000), 1, 0), 0, 0)
+    ts_diff = np.diff(ts, prepend=0)
+    times = (ffill(np.array([s_split * ts_diff]))[0])/1000
+    return ((times-11.15)/8).clip(max=1, min=-1)
 
 
 def get_exercises_feats(content_ids):
@@ -192,6 +262,11 @@ def get_exercises_feats(content_ids):
     e_feats[:, 2] = questions_lectures_wass[content_ids]
     e_feats[:, 3] = questions_lectures_pct[content_ids]
     return e_feats
+
+def process_ts_diff(diffs):
+    diffs = np.where(diffs==-1, 3428815957.4343348, diffs)
+    diffs = np.where(diffs==-2, 0, diffs)
+    return ((np.log(diffs/1000 + eps).astype(np.float32) - 15.047) / 9).clip(max=1, min=-1)
 
 
 class RIIDDataset(Dataset):
@@ -209,6 +284,7 @@ class RIIDDataset(Dataset):
         answered_correctly=None,
         timestamps=None,
         prior_question_elapsed_time=None,
+        c_ts_diff=None,
         read_file=True,
     ):
         """
@@ -231,6 +307,9 @@ class RIIDDataset(Dataset):
         self.answered_correctly = answered_correctly.astype(np.int8)
         self.timestamps = timestamps.astype(np.float32)
         self.prior_question_elapsed_time = prior_question_elapsed_time.astype(
+            np.float32
+        )
+        self.c_ts_diff = c_ts_diff.astype(
             np.float32
         )
 
@@ -264,6 +343,9 @@ class RIIDDataset(Dataset):
             prior_question_elapsed_time = np.array(
                 self.f[f"{user_id}/prior_question_elapsed_time"], dtype=np.float32
             )
+            c_ts_diff = np.array(
+                self.f[f"{user_id}/c_ts_diff"], dtype=np.float32
+            )
         else:
             content_ids = self.content_ids[idx - length + 1 : idx + 1]
             answered_correctly = self.answered_correctly[idx - length + 1 : idx + 1]
@@ -271,11 +353,15 @@ class RIIDDataset(Dataset):
             prior_question_elapsed_time = self.prior_question_elapsed_time[
                 idx - length + 1 : idx + 1
             ]
+            c_ts_diff = self.c_ts_diff[
+                idx - length + 1 : idx + 1
+            ]
         return (
             content_ids,
             answered_correctly,
             timestamps,
             prior_question_elapsed_time,
+            c_ts_diff,
             length,
         )
 
@@ -292,6 +378,7 @@ class RIIDDataset(Dataset):
             answered_correctly,
             timestamps,
             prior_question_elapsed_time,
+            c_ts_diff,
             length,
         ) = self.get_user_raw(idx)
         window_size = min(self.max_window_size, length)
@@ -305,9 +392,18 @@ class RIIDDataset(Dataset):
         content_ids = content_ids[: start_index + window_size].copy()
         answered_correctly = answered_correctly[: start_index + window_size].copy()
         timestamps = timestamps[: start_index + window_size].copy()
+        c_ts_diff = c_ts_diff[: start_index + window_size].copy()
 
         # get question parts
         parts = questions_lectures_parts[content_ids]
+
+        # session t
+        session_t = t_since_last_session(timestamps)
+        session_t = session_t[start_index:]
+
+        # content timestamp difference
+        c_ts_diffs = process_ts_diff(c_ts_diff)
+        c_ts_diffs = c_ts_diffs[start_index:]
 
         agg_feats = None
         if self.use_agg_feats:
@@ -360,6 +456,8 @@ class RIIDDataset(Dataset):
             "answers": torch.from_numpy(answers).long(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
+            "session_t": torch.from_numpy(session_t).float(),
+            "c_ts_diff": torch.from_numpy(c_ts_diffs).float(),
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
             else agg_feats,
@@ -395,6 +493,8 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
+            ("session_t", 0.0),
+            ("c_ts_diff", 0.0),
         ]
 
         if use_agg_feats:
@@ -478,6 +578,11 @@ def get_dataloaders(
 
     print("Reading pickle")
     df = pd.read_pickle(f"{get_wd()}riiid_train.pkl.gzip")
+    # add new feat
+    NEW_FEATS = np.load(f"{get_wd()}c_ts_diff.npz", allow_pickle=True)
+    print("adding content timestamp difference...")
+    df["c_ts_diff"] = NEW_FEATS["c_ts_diff"]
+    del NEW_FEATS
 
     if read_file:
         if not use_lectures:
@@ -511,6 +616,7 @@ def get_dataloaders(
         answered_correctly=df.answered_correctly.values,
         timestamps=df.timestamp.values,
         prior_question_elapsed_time=df.prior_question_elapsed_time.values,
+        c_ts_diff=df.c_ts_diff.values,
     )
     print(f"len(dataset): {len(dataset)}")
 

@@ -45,6 +45,7 @@ def train(cfg) -> None:
         use_lectures=use_lectures,
         num_workers=num_workers,
         use_agg_feats=use_agg_feats,
+        read_file=True
     )
 
     # Init our model
@@ -63,7 +64,7 @@ def train(cfg) -> None:
         use_exercise_feats=use_exercise_feats,
     )
 
-    experiment_name = f"ALL_YOUR_BASES_BELONG_TO_US"
+    experiment_name = f"real_session_mean_10_heads_70_emb_dim_content_ts_diff_log"
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
     # Initialize a trainer

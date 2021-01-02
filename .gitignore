@@ -5,6 +5,7 @@
 lightning_logs/
 outputs/
 config.yaml
+c_ts_diff.npz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -41,7 +41,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_part=8,  # number of different parts = 7 + 1 (for padding)
         n_tags=189,  # number of different tags = 188 + 1 (for padding)
         n_correct=5,  # 0,1 (false, true), 2 (start token), 3 (padding), 4 (lecture)
-        n_agg_feats=12,  # number of agg feats
+        n_agg_feats=11,  # number of agg feats
         n_exercise_feats=4,  # number of exercise feats
         emb_dim=64,  # embedding dimension
         dropout=0.1,
@@ -54,7 +54,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         use_prior_q_times=False,
         use_agg_feats=False,
         use_exercise_feats=False,
-        lr_step_frequency=2000,
+        lr_step_frequency=5000,
     ):
         super(RIIDDTransformerModel, self).__init__()
         self.model_type = "RiiidTransformer"
@@ -89,8 +89,12 @@ class RIIDDTransformerModel(pl.LightningModule):
             n_correct, emb_dim, padding_idx=3
         )  # 2 + 1 for start token + 1 for padding_idn_inputs
         self.embed_timestamps = nn.Linear(1, emb_dim)
+
+        # session_t and content timestamp difference
+        self.embed_session_t = nn.Linear(1, emb_dim)
+        self.embed_c_ts_diff = nn.Linear(1, emb_dim)
         # response weights to weight the mean embeded response embeddings
-        r_w = [0.5, 0.5]
+        r_w = [0.5, 0.5, 0.5, 0.5]
 
         if use_prior_q_times:
             # embed prior q time
@@ -144,6 +148,8 @@ class RIIDDTransformerModel(pl.LightningModule):
         tags,
         timestamps,
         prior_q_times,
+        session_t,
+        c_ts_diff,
         agg_feats,
         e_feats,
     ):
@@ -172,8 +178,10 @@ class RIIDDTransformerModel(pl.LightningModule):
         # sequence that will go into decoder
         embeded_answered_correctly = self.embed_answered_correctly(answers)
         embeded_timestamps = self.embed_timestamps(timestamps.unsqueeze(2))
+        embeded_session_t = self.embed_session_t(session_t.unsqueeze(2))
+        embeded_c_ts_diff = self.embed_c_ts_diff(c_ts_diff.unsqueeze(2))
 
-        response_sequence_components = [embeded_answered_correctly, embeded_timestamps]
+        response_sequence_components = [embeded_answered_correctly, embeded_timestamps, embeded_session_t, embeded_c_ts_diff]
         if self.use_prior_q_times:
             embeded_q_times = self.embed_prior_q_time(prior_q_times.unsqueeze(2))
             # zero embedding - if start token
@@ -221,6 +229,8 @@ class RIIDDTransformerModel(pl.LightningModule):
             batch["tags"],
             batch["timestamps"],
             batch["prior_q_times"],
+            batch["session_t"],
+            batch["c_ts_diff"],
             batch["agg_feats"] if self.use_agg_feats else None,
             batch["e_feats"] if self.use_exercise_feats else None,
         )

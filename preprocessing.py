@@ -257,6 +257,7 @@ def generate_h5(df, file_name="feats.h5"):
                 "answered_correctly",
                 "timestamp",
                 "prior_question_elapsed_time",
+                "c_ts_diff",
             ]
         ].values
 
@@ -269,6 +270,9 @@ def generate_h5(df, file_name="feats.h5"):
         hf.create_dataset(f"{user_id}/timestamps", data=processed_feats[:, 2])
         hf.create_dataset(
             f"{user_id}/prior_question_elapsed_time", data=processed_feats[:, 3],
+        )
+        hf.create_dataset(
+            f"{user_id}/c_ts_diff", data=processed_feats[:, 4],
         )
 
     hf.close()

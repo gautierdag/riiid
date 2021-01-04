@@ -43,6 +43,8 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_correct=5,  # 0,1 (false, true), 2 (start token), 3 (padding), 4 (lecture)
         n_agg_feats=12,  # number of agg feats
         n_exercise_feats=4,  # number of exercise feats
+        n_lgbm_feats=4,
+        intermediate_lgbm_feats_size=16,  # how large should the lgbm feats be processed to
         emb_dim=64,  # embedding dimension
         dropout=0.1,
         n_heads: int = 1,
@@ -54,6 +56,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         use_prior_q_times=False,
         use_agg_feats=False,
         use_exercise_feats=False,
+        use_lgbm_feats=False,
         lr_step_frequency=2000,
     ):
         super(RIIDDTransformerModel, self).__init__()
@@ -66,6 +69,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.use_prior_q_times = use_prior_q_times
         self.use_agg_feats = use_agg_feats
         self.use_exercise_feats = use_exercise_feats
+        self.use_lgbm_feats = use_lgbm_feats
 
         # save params of models to yml
         self.save_hyperparameters()
@@ -115,6 +119,14 @@ class RIIDDTransformerModel(pl.LightningModule):
             activation=activation,
         )
 
+        if self.use_lgbm_feats:
+            self.embed_lgbm_feats = nn.Linear(
+                n_lgbm_feats, intermediate_lgbm_feats_size
+            )
+            self.intermediate_output_layer = nn.Linear(
+                emb_dim + intermediate_lgbm_feats_size, 2
+            )
+
         self.out_linear = nn.Linear(emb_dim, 2)
         init_weights(self)
 
@@ -144,8 +156,10 @@ class RIIDDTransformerModel(pl.LightningModule):
         tags,
         timestamps,
         prior_q_times,
-        agg_feats,
-        e_feats,
+        agg_feats=None,
+        e_feats=None,
+        lgbm_feats=None,
+        **kwargs,
     ):
         # content_ids: (Source Sequence Length, Number of samples, Embedding)
         # tgt: (Target Sequence Length,Number of samples, Embedding)
@@ -198,9 +212,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         embeded_exercises = embeded_exercises + embedded_positions[1:, :, :]
 
         # mask of shape S x S -> prevents attention looking forward
-        top_right_attention_mask = self.generate_square_subsequent_mask(
-            sequence_length
-        )
+        top_right_attention_mask = self.generate_square_subsequent_mask(sequence_length)
 
         output = self.transformer(
             embeded_exercises,
@@ -209,21 +221,14 @@ class RIIDDTransformerModel(pl.LightningModule):
             src_mask=top_right_attention_mask,  # (S,S)
         )
 
+        if self.use_lgbm_feats:
+            embeded_lgbm_feats = F.relu(self.embed_lgbm_feats(lgbm_feats))
+            output = self.intermediate_output_layer(
+                torch.cat((embeded_lgbm_feats, output), dim=-1)
+            )
+
         output = self.out_linear(output)
         return F.softmax(output, dim=2)[:, :, 1]
-
-    def process_batch_step(self, batch):
-        # return result
-        return self(
-            batch["content_ids"],
-            batch["parts"],
-            batch["answers"],
-            batch["tags"],
-            batch["timestamps"],
-            batch["prior_q_times"],
-            batch["agg_feats"] if self.use_agg_feats else None,
-            batch["e_feats"] if self.use_exercise_feats else None,
-        )
 
     @auto_move_data
     def predict_n_steps(self, batch, steps, return_all_preds=False):
@@ -241,7 +246,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         sequence_indexes = []
 
         for i in range(steps.max().int(), 0, -1):
-            preds = self.process_batch_step(batch)
+            preds = self(**batch)
 
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
@@ -274,7 +279,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_nb):
-        result = self.process_batch_step(batch)
+        result = self(**batch)
         loss = F.binary_cross_entropy(
             result, batch["answered_correctly"], weight=batch["loss_mask"]
         )
@@ -295,7 +300,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         user_indexes = []
         sequence_indexes = []
         for i in range(steps.max().int(), 0, -1):
-            preds = self.process_batch_step(batch)
+            preds = self(**batch)
             sequence_indexes_at_i = lengths[steps >= i] - i
             user_indexes_at_i = users[steps >= i]
 

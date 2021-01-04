@@ -366,6 +366,9 @@ class RIIDDataset(Dataset):
             "e_feats": torch.from_numpy(e_feats).float()
             if e_feats is not None
             else e_feats,
+            "lgbm_feats": torch.zeros(  # CHANGE THIS <<<<=================8
+                (len(answers), 4)  # CHANGE THIS <<<<=================8
+            ).float(),  # CHANGE THIS <<<<=================8
             "length": window_size,
         }
 
@@ -395,6 +398,7 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
             ("timestamps", 0.0),  # note timestamps isnt an embedding
             ("tags", 188),
             ("prior_q_times", 0),
+            ("lgbm_feats", 0.0),
         ]
 
         if use_agg_feats:
@@ -429,10 +433,7 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
 
 
 def get_train_val_idxs(
-    df,
-    validation_size=2500000,
-    new_user_prob=0.25,
-    use_lectures=True,
+    df, validation_size=2500000, new_user_prob=0.25, use_lectures=True,
 ):
     # except FileNotFoundError:
     train_idxs = []

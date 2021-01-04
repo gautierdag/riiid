@@ -124,7 +124,7 @@ class RIIDDTransformerModel(pl.LightningModule):
                 n_lgbm_feats, intermediate_lgbm_feats_size
             )
             self.intermediate_output_layer = nn.Linear(
-                emb_dim + intermediate_lgbm_feats_size, 2
+                emb_dim + intermediate_lgbm_feats_size, emb_dim
             )
 
         self.out_linear = nn.Linear(emb_dim, 2)

@@ -37,6 +37,7 @@ def train(cfg) -> None:
     val_size = cfg["val_size"]
     use_agg_feats = cfg["use_agg_feats"]
     use_exercise_feats = cfg["use_exercise_feats"]
+    use_lgbm_feats = cfg["use_lgbm_feats"]
 
     train_loader, val_loader = get_dataloaders(
         batch_size=batch_size,
@@ -61,6 +62,7 @@ def train(cfg) -> None:
         lr_step_frequency=val_step_frequency,
         use_agg_feats=use_agg_feats,
         use_exercise_feats=use_exercise_feats,
+        use_lgbm_feats=use_lgbm_feats,
     )
 
     experiment_name = f"ALL_YOUR_BASES_BELONG_TO_US"
@@ -87,9 +89,7 @@ def train(cfg) -> None:
 
     # Train the model ⚡
     trainer.fit(
-        model,
-        train_dataloader=train_loader,
-        val_dataloaders=[val_loader],
+        model, train_dataloader=train_loader, val_dataloaders=[val_loader],
     )
 
     # Test on Final Full validation set

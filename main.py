@@ -38,6 +38,7 @@ def train(cfg) -> None:
     use_agg_feats = cfg["use_agg_feats"]
     use_exercise_feats = cfg["use_exercise_feats"]
     use_lgbm_feats = cfg["use_lgbm_feats"]
+    concat_response_embeds = cfg["concat_response_embeds"]
 
     train_loader, val_loader = get_dataloaders(
         batch_size=batch_size,
@@ -63,9 +64,10 @@ def train(cfg) -> None:
         use_agg_feats=use_agg_feats,
         use_exercise_feats=use_exercise_feats,
         use_lgbm_feats=use_lgbm_feats,
+        concat_response_embeds=concat_response_embeds
     )
 
-    experiment_name = f"ALL_YOUR_BASES_BELONG_TO_US"
+    experiment_name = f"concat_response_embeds"
     logger = TensorBoardLogger(f"{get_wd()}lightning_logs", name=experiment_name)
 
     # Initialize a trainer

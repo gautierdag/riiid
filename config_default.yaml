@@ -1,6 +1,6 @@
 # lg model default - copy to config.yaml
 learning_rate: 0.001
-emb_dim: 64
+emb_dim: 128
 dropout: 0.0
 n_heads: 4
 n_encoder_layers: 4
@@ -17,3 +17,5 @@ val_size: 0.10
 accumulate_grad_batches: 1
 use_agg_feats: True
 use_exercise_feats: True
+use_lgbm_feats: False
+concat_response_embeds: False

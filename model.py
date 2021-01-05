@@ -45,7 +45,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         n_exercise_feats=4,  # number of exercise feats
         n_lgbm_feats=4,
         intermediate_lgbm_feats_size=16,  # how large should the lgbm feats be processed to
-        emb_dim=64,  # embedding dimension
+        emb_dim=128,  # embedding dimension
         dropout=0.1,
         n_heads: int = 1,
         n_encoder_layers: int = 2,
@@ -57,6 +57,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         use_agg_feats=False,
         use_exercise_feats=False,
         use_lgbm_feats=False,
+        concat_response_embeds=False,
         lr_step_frequency=2000,
     ):
         super(RIIDDTransformerModel, self).__init__()
@@ -70,6 +71,7 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.use_agg_feats = use_agg_feats
         self.use_exercise_feats = use_exercise_feats
         self.use_lgbm_feats = use_lgbm_feats
+        self.concat_response_embeds = concat_response_embeds
 
         # save params of models to yml
         self.save_hyperparameters()
@@ -88,22 +90,33 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.exercise_weights = nn.Parameter(torch.tensor(e_w), requires_grad=True)
         self.register_parameter("exercise_weights", self.exercise_weights)
 
+        response_emb_dim = emb_dim
+        if self.concat_response_embeds:
+            num_embeddings = 2
+            if use_prior_q_times:
+                num_embeddings += 1
+            if use_agg_feats: 
+                num_embeddings += 1
+            assert emb_dim % num_embeddings == 0, "if concatenating embeddings, emb_dim should be divisible by num_embeddings"
+            response_emb_dim = int(emb_dim / num_embeddings)
+
+
         ### RESPONSE SEQUENCE (1st time stamp of sequence is useless)
         self.embed_answered_correctly = nn.Embedding(
-            n_correct, emb_dim, padding_idx=3
+            n_correct, response_emb_dim, padding_idx=3
         )  # 2 + 1 for start token + 1 for padding_idn_inputs
-        self.embed_timestamps = nn.Linear(1, emb_dim)
+        self.embed_timestamps = nn.Linear(1, response_emb_dim)
         # response weights to weight the mean embeded response embeddings
         r_w = [0.5, 0.5]
-
         if use_prior_q_times:
             # embed prior q time
-            self.embed_prior_q_time = nn.Linear(1, emb_dim)
+            self.embed_prior_q_time = nn.Linear(1, response_emb_dim)
             r_w.append(0.5)
         if use_agg_feats:
-            self.embed_agg_feats = nn.Linear(n_agg_feats, emb_dim)
+            self.embed_agg_feats = nn.Linear(n_agg_feats, response_emb_dim)
             r_w.append(0.5)
 
+        # NOTE these wont be used if concatenating embeds (concat_response_embeds)
         self.response_weights = nn.Parameter(torch.tensor(r_w), requires_grad=True)
         self.register_parameter("response_weights", self.response_weights)  ###
 
@@ -199,10 +212,13 @@ class RIIDDTransformerModel(pl.LightningModule):
             embeded_agg_feats[0, torch.where(answers[0, :] == 2)[0], :] = 0
             response_sequence_components.append(embeded_agg_feats)
 
-        r_w = F.softmax(self.response_weights, dim=0)
-        embeded_responses = (
-            torch.stack(response_sequence_components, dim=3) * r_w
-        ).sum(dim=3)
+        if self.concat_response_embeds:
+            embeded_responses = torch.cat(response_sequence_components, dim=-1)
+        else:
+            r_w = F.softmax(self.response_weights, dim=0)
+            embeded_responses = (
+                torch.stack(response_sequence_components, dim=3) * r_w
+            ).sum(dim=3)
 
         # adding positional vector
         sequence_length = embeded_responses.shape[0]

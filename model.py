@@ -106,6 +106,12 @@ class RIIDDTransformerModel(pl.LightningModule):
         self.embed_answered_correctly = nn.Linear(
             1, response_emb_dim, bias=False
         )  # 2 + 1 for start token + 1 for padding_idn_inputs
+
+        w = torch.empty(response_emb_dim, 1)
+        nn.init.xavier_uniform_(w)
+        self.lecture_embedding = nn.Parameter(w.squeeze(1), requires_grad=True)
+        self.register_parameter("lecture_embedding", self.lecture_embedding)  ###
+
         self.embed_timestamps = nn.Linear(1, response_emb_dim)
         # response weights to weight the mean embeded response embeddings
         r_w = [0.5, 0.5]
@@ -198,8 +204,11 @@ class RIIDDTransformerModel(pl.LightningModule):
         ).sum(dim=3)
 
         # sequence that will go into decoder
-        embeded_answered_correctly = self.embed_answered_correctly(answers)
+        embeded_answered_correctly = self.embed_answered_correctly(answers.unsqueeze(2))
         embeded_answered_correctly[0, torch.where(answers[0, :] == 2)[0], :] = 0
+        embeded_answered_correctly[
+            0, torch.where(answers[0, :] == 4)[0], :
+        ] = self.lecture_embedding
 
         embeded_timestamps = self.embed_timestamps(timestamps.unsqueeze(2))
 

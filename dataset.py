@@ -357,7 +357,7 @@ class RIIDDataset(Dataset):
             "tags": torch.from_numpy(tags).long(),
             "content_ids": torch.from_numpy(content_ids).long(),
             "answered_correctly": torch.from_numpy(answered_correctly).float(),
-            "answers": torch.from_numpy(answers).long(),
+            "answers": torch.from_numpy(answers).float(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
             "agg_feats": torch.from_numpy(agg_feats).float()

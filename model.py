@@ -95,15 +95,16 @@ class RIIDDTransformerModel(pl.LightningModule):
             num_embeddings = 2
             if use_prior_q_times:
                 num_embeddings += 1
-            if use_agg_feats: 
+            if use_agg_feats:
                 num_embeddings += 1
-            assert emb_dim % num_embeddings == 0, "if concatenating embeddings, emb_dim should be divisible by num_embeddings"
+            assert (
+                emb_dim % num_embeddings == 0
+            ), "if concatenating embeddings, emb_dim should be divisible by num_embeddings"
             response_emb_dim = int(emb_dim / num_embeddings)
 
-
         ### RESPONSE SEQUENCE (1st time stamp of sequence is useless)
-        self.embed_answered_correctly = nn.Embedding(
-            n_correct, response_emb_dim, padding_idx=3
+        self.embed_answered_correctly = nn.Linear(
+            1, response_emb_dim, bias=False
         )  # 2 + 1 for start token + 1 for padding_idn_inputs
         self.embed_timestamps = nn.Linear(1, response_emb_dim)
         # response weights to weight the mean embeded response embeddings
@@ -198,6 +199,8 @@ class RIIDDTransformerModel(pl.LightningModule):
 
         # sequence that will go into decoder
         embeded_answered_correctly = self.embed_answered_correctly(answers)
+        embeded_answered_correctly[0, torch.where(answers[0, :] == 2)[0], :] = 0
+
         embeded_timestamps = self.embed_timestamps(timestamps.unsqueeze(2))
 
         response_sequence_components = [embeded_answered_correctly, embeded_timestamps]
@@ -276,7 +279,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             # set answer to either 0 or 1 if not lecture
             batch["answers"][a_seq_idx, u_seq_idx] = torch.where(
                 batch["answers"][a_seq_idx, u_seq_idx] != 4,
-                (preds[sequence_indexes_at_i[answers_idx], u_seq_idx] > 0.5).long(),
+                preds[sequence_indexes_at_i[answers_idx], u_seq_idx],
                 batch["answers"][a_seq_idx, u_seq_idx],
             )
 
@@ -329,7 +332,7 @@ class RIIDDTransformerModel(pl.LightningModule):
             # set answer to either 0 or 1 if not lecture
             batch["answers"][a_seq_idx, u_seq_idx] = torch.where(
                 batch["answers"][a_seq_idx, u_seq_idx] != 4,
-                (preds[sequence_indexes_at_i[answers_idx], u_seq_idx] > 0.5).long(),
+                preds[sequence_indexes_at_i[answers_idx], u_seq_idx],
                 batch["answers"][a_seq_idx, u_seq_idx],
             )
 

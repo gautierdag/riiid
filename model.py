@@ -307,9 +307,42 @@ class RIIDDTransformerModel(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_nb):
-        result = self(**batch)
+        # result = self(**batch)
+        # loss = F.binary_cross_entropy(
+        #     result, batch["answered_correctly"], weight=batch["loss_mask"]
+        # )
+        # self.log("train_loss", loss.cpu())
+        # return loss
+        return self.iterated_training(batch)
+
+    def iterated_training(self, batch, bundle_loss_multiplier=10):
+        """
+        Iterated training schedule to predict over the last bundle of each batch
+        """
+
+        last_bundle_start = torch.argmax(batch["t"], dim=0)
+        bundle_steps = batch["length"] - last_bundle_start
+
+        users = torch.arange(len(last_bundle_start))
+        preds = self(**batch).detach()  # detach computation graph
+
+        batch["loss_mask"][last_bundle_start, users] *= bundle_loss_multiplier
+        for s in range(1, bundle_steps.max()):
+            bundle_step_idxs = last_bundle_start + s
+            u_seq_idx = users[bundle_step_idxs < batch["length"]]
+            bundle_step_idxs = bundle_step_idxs[bundle_step_idxs < batch["length"]]
+            batch["answers"][bundle_step_idxs, u_seq_idx] = preds[
+                bundle_step_idxs, u_seq_idx
+            ]
+            if s == bundle_steps.max() - 1:
+                preds = self(**batch)  # backprop on full preds
+            else:
+                preds = self(**batch).detach()  # detach computation if not at last step
+
+            batch["loss_mask"][bundle_step_idxs, u_seq_idx] *= bundle_loss_multiplier
+
         loss = F.binary_cross_entropy(
-            result, batch["answered_correctly"], weight=batch["loss_mask"]
+            preds, batch["answered_correctly"], weight=batch["loss_mask"]
         )
         self.log("train_loss", loss.cpu())
         return loss

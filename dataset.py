@@ -31,9 +31,20 @@ eps = 0.0000001
 #     return arr[idx]
 
 
+def ffill_bt(arr):
+    mask = np.where(arr == 0, True, False)
+    idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    out = arr[np.arange(idx.shape[0])[:, None], idx]
+    return out
+
+
 def get_time_elapsed_from_timestamp(arr):
     arr_seconds = np.diff(arr, prepend=0) / 1000
-    return (np.log(arr_seconds + eps).astype(np.float32) - 3.5) / 20
+    arr_seconds = ffill_bt(np.array([arr_seconds]))[0]
+    return (
+        np.log(arr_seconds + eps).astype(np.float32) - 4.1801248
+    ) / 20.29822045095832
 
 
 def dfill(a):
@@ -359,6 +370,7 @@ class RIIDDataset(Dataset):
             "answered_correctly": torch.from_numpy(answered_correctly).float(),
             "answers": torch.from_numpy(answers).float(),
             "timestamps": torch.from_numpy(time_elapsed_timestamps).float(),
+            "t": torch.from_numpy(timestamps).float(),  # original timestamps
             "prior_q_times": torch.from_numpy(prior_q_times).float(),
             "agg_feats": torch.from_numpy(agg_feats).float()
             if agg_feats is not None
@@ -399,6 +411,7 @@ def get_collate_fn(use_agg_feats=True, use_e_feats=True):
             ("tags", 188),
             ("prior_q_times", 0),
             ("lgbm_feats", 0.0),
+            ("t", 0),
         ]
 
         if use_agg_feats:
